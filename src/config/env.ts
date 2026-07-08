@@ -5,6 +5,7 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4000),
   APP_URL: z.string().url().default('http://localhost:5173'),
+  APP_ORIGINS: z.string().optional(),
   JWT_SECRET: z.string().min(16).default('change-me-in-production'),
   JWT_EXPIRES_IN: z.string().default('1d'),
   DB_CONNECTION: z.literal('mysql').default('mysql'),
@@ -36,6 +37,10 @@ export const env = {
   nodeEnv: parsed.NODE_ENV,
   port: parsed.PORT,
   appUrl: parsed.APP_URL,
+  appOrigins: (parsed.APP_ORIGINS ?? parsed.APP_URL)
+    .split(',')
+    .map((origin) => origin.trim().replace(/\/$/, ''))
+    .filter(Boolean),
   auth: {
     jwtSecret: parsed.JWT_SECRET,
     jwtExpiresIn: parsed.JWT_EXPIRES_IN,

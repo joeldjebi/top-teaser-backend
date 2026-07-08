@@ -15,7 +15,14 @@ app.set('trust proxy', 1)
 app.use(helmet())
 app.use(
   cors({
-    origin: env.appUrl,
+    origin(origin, callback) {
+      if (!origin || env.appOrigins.includes(origin.replace(/\/$/, ''))) {
+        callback(null, true)
+        return
+      }
+
+      callback(null, false)
+    },
   }),
 )
 app.use(
