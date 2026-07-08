@@ -11,6 +11,11 @@ type UserRow = RowDataPacket & {
   id: number
 }
 
+type SuperAdminRow = RowDataPacket & {
+  id: number
+  email: string
+}
+
 type CountRow = RowDataPacket & {
   total: number
 }
@@ -143,6 +148,14 @@ async function ensureSuperAdminRole() {
   return result.insertId
 }
 
+async function listSuperAdmins() {
+  const [rows] = await db.execute<SuperAdminRow[]>(
+    "SELECT id, email FROM users WHERE role = 'super_admin' ORDER BY id ASC",
+  )
+
+  return rows
+}
+
 async function createSuperAdmin() {
   const shouldDelete = process.argv.includes('--delete')
   const name = readArg('name') ?? process.env.SUPER_ADMIN_NAME ?? 'Super Admin'
@@ -157,10 +170,30 @@ async function createSuperAdmin() {
   }
 
   await ensureUserSchema()
+  const existingSuperAdmins = await listSuperAdmins()
+  const existingSameSuperAdmin = existingSuperAdmins.find(
+    (superAdmin) => superAdmin.email.toLowerCase() === email.toLowerCase(),
+  )
+  const existingOtherSuperAdmin = existingSuperAdmins.find(
+    (superAdmin) => superAdmin.email.toLowerCase() !== email.toLowerCase(),
+  )
+
+  if (existingSuperAdmins.length > 1) {
+    throw new Error(
+      'Plusieurs super admins existent déjà. Nettoyez la table users manuellement avant de relancer cette commande.',
+    )
+  }
+
+  if (existingOtherSuperAdmin) {
+    throw new Error(
+      `Un super admin existe déjà (${existingOtherSuperAdmin.email}). Un seul super admin est autorisé.`,
+    )
+  }
+
   const roleId = await ensureSuperAdminRole()
   const passwordHash = await bcrypt.hash(password, 12)
 
-  if (shouldDelete) {
+  if (shouldDelete && existingSameSuperAdmin) {
     await db.execute('DELETE FROM users WHERE email = ?', [email])
   }
 

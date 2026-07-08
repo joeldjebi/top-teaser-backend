@@ -185,6 +185,14 @@ export async function findAdminUserById(id: number) {
   return rows[0] ? mapUser(rows[0]) : null
 }
 
+export async function countSuperAdmins() {
+  const [rows] = await db.execute<Array<RowDataPacket & { total: number }>>(
+    "SELECT COUNT(*) AS total FROM users WHERE role = 'super_admin'",
+  )
+
+  return Number(rows[0]?.total ?? 0)
+}
+
 export async function createAdminUser(input: {
   name: string
   email: string

@@ -10,11 +10,13 @@ import {
   sendAdminInvitation,
 } from './admin-invitations.service.js'
 import {
+  countSuperAdmins,
   createAdminRole,
   createAdminUser,
   deleteAdminRole,
   deleteAdminUser,
   findAdminRoleById,
+  findAdminUserById,
   listAdminRoles,
   listAdminUsers,
   updateAdminPassword,
@@ -281,6 +283,20 @@ adminUsersRouter.delete(
 
     if (params.data.id === response.locals.user.id) {
       response.status(409).json({ message: 'Vous ne pouvez pas supprimer votre propre compte.' })
+      return
+    }
+
+    const admin = await findAdminUserById(params.data.id)
+
+    if (!admin) {
+      response.status(404).json({ message: 'Admin not found.' })
+      return
+    }
+
+    if (admin.role === 'super_admin' && (await countSuperAdmins()) <= 1) {
+      response.status(409).json({
+        message: 'Impossible de supprimer le seul super admin de la plateforme.',
+      })
       return
     }
 
