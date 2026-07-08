@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { z } from 'zod'
 import { rateLimit } from '../../middleware/rate-limit.middleware.js'
 import { requireAuth } from './auth.middleware.js'
-import { getUserFromToken, loginAdmin } from './auth.service.js'
+import { fullPermissions, getUserFromToken, loginAdmin } from './auth.service.js'
 import { logActivity } from '../activity-logs/activity-logs.repository.js'
 import {
   findValidAdminInvitationByTokenHash,
@@ -10,6 +10,8 @@ import {
 } from '../admin-users/admin-invitations.repository.js'
 import { hashInvitationToken } from '../admin-users/admin-invitations.service.js'
 import {
+  countSuperAdmins,
+  createInitialSuperAdmin,
   findAdminUserById,
   updateAdminPassword,
   updateAdminUser,
@@ -34,7 +36,73 @@ const acceptInviteSchema = z.object({
   password: z.string().min(8).max(120),
 })
 
+const bootstrapSuperAdminSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  email: z.string().trim().email().max(190),
+  password: z.string().min(8).max(120),
+})
+
 export const authRouter = Router()
+
+authRouter.get('/bootstrap-status', async (_request, response) => {
+  response.json({
+    data: {
+      canCreateSuperAdmin: (await countSuperAdmins()) === 0,
+    },
+  })
+})
+
+authRouter.post(
+  '/bootstrap-super-admin',
+  rateLimit({
+    max: 5,
+    scope: 'auth_bootstrap_super_admin',
+    windowMs: 15 * 60 * 1000,
+  }),
+  async (request, response) => {
+    if ((await countSuperAdmins()) > 0) {
+      response.status(409).json({
+        message: 'Le compte super admin existe déjà.',
+      })
+      return
+    }
+
+    const parsed = bootstrapSuperAdminSchema.safeParse(request.body)
+
+    if (!parsed.success) {
+      response.status(422).json({
+        message: 'Invalid super admin payload.',
+        errors: parsed.error.flatten().fieldErrors,
+      })
+      return
+    }
+
+    const admin = await createInitialSuperAdmin({
+      ...parsed.data,
+      permissions: fullPermissions,
+    })
+
+    if (!admin) {
+      response.status(409).json({
+        message: 'Le compte super admin existe déjà.',
+      })
+      return
+    }
+
+    await logActivity({
+      actor: { id: admin.id, name: admin.name, email: admin.email },
+      action: 'bootstrap_super_admin',
+      resource: 'auth',
+      resourceId: admin.id,
+      message: `Compte super admin initial créé : ${admin.email}`,
+    })
+
+    response.status(201).json({
+      data: admin,
+      message: 'Compte super admin créé. Vous pouvez maintenant vous connecter.',
+    })
+  },
+)
 
 authRouter.post(
   '/login',

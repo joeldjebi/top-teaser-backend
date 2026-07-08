@@ -193,6 +193,79 @@ export async function countSuperAdmins() {
   return Number(rows[0]?.total ?? 0)
 }
 
+async function findOrCreateSuperAdminRole(permissions: PermissionMatrix) {
+  const [roles] = await db.execute<Array<RowDataPacket & { id: number }>>(
+    `SELECT id
+     FROM admin_roles
+     WHERE name IN ('Super administrateur', 'Administrateur complet')
+     ORDER BY FIELD(name, 'Super administrateur', 'Administrateur complet'), id
+     LIMIT 1`,
+  )
+
+  if (roles[0]) {
+    await db.execute(
+      `UPDATE admin_roles
+       SET name = ?, description = ?, permissions_json = ?
+       WHERE id = ?`,
+      [
+        'Super administrateur',
+        'Accès complet à tous les modules.',
+        JSON.stringify(permissions),
+        roles[0].id,
+      ],
+    )
+
+    return roles[0].id
+  }
+
+  const [result] = await db.execute<ResultSetHeader>(
+    `INSERT INTO admin_roles (name, description, permissions_json)
+     VALUES (?, ?, ?)`,
+    [
+      'Super administrateur',
+      'Accès complet à tous les modules.',
+      JSON.stringify(permissions),
+    ],
+  )
+
+  return result.insertId
+}
+
+export async function createInitialSuperAdmin(input: {
+  name: string
+  email: string
+  password: string
+  permissions: PermissionMatrix
+}) {
+  if ((await countSuperAdmins()) > 0) {
+    return null
+  }
+
+  const roleId = await findOrCreateSuperAdminRole(input.permissions)
+  const passwordHash = await bcrypt.hash(input.password, 12)
+  const [result] = await db.execute<ResultSetHeader>(
+    `INSERT INTO users (name, email, password_hash, role, role_id)
+     VALUES (?, ?, ?, 'super_admin', ?)
+     ON DUPLICATE KEY UPDATE
+       name = VALUES(name),
+       password_hash = VALUES(password_hash),
+       role = 'super_admin',
+       role_id = VALUES(role_id)`,
+    [input.name, input.email, passwordHash, roleId],
+  )
+
+  if (result.insertId > 0) {
+    return findAdminUserById(result.insertId)
+  }
+
+  const [rows] = await db.execute<Array<RowDataPacket & { id: number }>>(
+    'SELECT id FROM users WHERE email = ? LIMIT 1',
+    [input.email],
+  )
+
+  return rows[0] ? findAdminUserById(rows[0].id) : null
+}
+
 export async function createAdminUser(input: {
   name: string
   email: string
