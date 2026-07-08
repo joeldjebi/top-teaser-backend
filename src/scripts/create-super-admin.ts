@@ -11,6 +11,10 @@ type UserRow = RowDataPacket & {
   id: number
 }
 
+type CountRow = RowDataPacket & {
+  total: number
+}
+
 function readArg(name: string) {
   const prefixed = `--${name}=`
   const inline = process.argv.find((arg) => arg.startsWith(prefixed))
@@ -28,7 +32,80 @@ function readArg(name: string) {
   return undefined
 }
 
+async function tableExists(tableName: string) {
+  const [rows] = await db.execute<CountRow[]>(
+    `SELECT COUNT(*) AS total
+     FROM information_schema.TABLES
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?`,
+    [tableName],
+  )
+
+  return Number(rows[0]?.total ?? 0) > 0
+}
+
+async function columnExists(tableName: string, columnName: string) {
+  const [rows] = await db.execute<CountRow[]>(
+    `SELECT COUNT(*) AS total
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?
+       AND COLUMN_NAME = ?`,
+    [tableName, columnName],
+  )
+
+  return Number(rows[0]?.total ?? 0) > 0
+}
+
+async function ensureUserSchema() {
+  if (!(await tableExists('users'))) {
+    await db.execute(`
+      CREATE TABLE users (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(160) NOT NULL,
+        email VARCHAR(190) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        role ENUM('admin', 'super_admin') NOT NULL DEFAULT 'admin',
+        role_id BIGINT UNSIGNED NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_users_role_id (role_id)
+      )
+    `)
+
+    return
+  }
+
+  if (!(await columnExists('users', 'role_id'))) {
+    await db.execute('ALTER TABLE users ADD COLUMN role_id BIGINT UNSIGNED NULL AFTER role')
+    await db.execute('ALTER TABLE users ADD INDEX idx_users_role_id (role_id)')
+  }
+
+  await db.execute(
+    "ALTER TABLE users MODIFY role ENUM('admin', 'super_admin') NOT NULL DEFAULT 'admin'",
+  )
+}
+
+async function ensureAdminRolesSchema() {
+  if (await tableExists('admin_roles')) {
+    return
+  }
+
+  await db.execute(`
+    CREATE TABLE admin_roles (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(160) NOT NULL,
+      description TEXT NULL,
+      permissions_json JSON NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+  `)
+}
+
 async function ensureSuperAdminRole() {
+  await ensureAdminRolesSchema()
+
   const [roles] = await db.execute<RoleRow[]>(
     `SELECT id
      FROM admin_roles
@@ -79,6 +156,7 @@ async function createSuperAdmin() {
     )
   }
 
+  await ensureUserSchema()
   const roleId = await ensureSuperAdminRole()
   const passwordHash = await bcrypt.hash(password, 12)
 
