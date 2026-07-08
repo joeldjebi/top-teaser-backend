@@ -42,6 +42,10 @@ async function readRecords(input: {
 }) {
   const filename = input.originalFilename.toLowerCase()
 
+  if (filename.endsWith('.xls')) {
+    return readHtmlTableRecords(input.buffer)
+  }
+
   if (
     filename.endsWith('.xlsx') ||
     input.mimeType?.includes('spreadsheet') ||
@@ -107,6 +111,53 @@ async function readExcelRecords(buffer: Buffer) {
   return records
 }
 
+function readHtmlTableRecords(buffer: Buffer) {
+  const html = buffer.toString('utf8')
+  const rows = [...html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map(
+    (match) => match[1],
+  )
+
+  if (rows.length === 0) {
+    return readCsvRecords(buffer)
+  }
+
+  const table = rows.map((row) =>
+    [...row.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map((match) =>
+      decodeHtml(stripTags(match[1]).trim()),
+    ),
+  )
+  const [headers, ...bodyRows] = table
+
+  if (!headers || headers.length === 0) {
+    return []
+  }
+
+  return bodyRows
+    .filter((row) => row.some(Boolean))
+    .map((row) =>
+      headers.reduce<CsvRecord>((record, header, index) => {
+        if (header) {
+          record[header] = row[index] || undefined
+        }
+
+        return record
+      }, {}),
+    )
+}
+
+function stripTags(value: string) {
+  return value.replace(/<[^>]+>/g, '')
+}
+
+function decodeHtml(value: string) {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+}
+
 async function importContactRecords(records: CsvRecord[]) {
   const summary: ContactImportSummary = {
     totalRows: records.length,
@@ -137,7 +188,7 @@ async function importContactRecords(records: CsvRecord[]) {
         rowNumber,
         email: readColumn(record, emailColumns) ?? null,
         status: 'invalid',
-        reason: 'Invalid email or contact data.',
+        reason: 'Email ou numéro mobile manquant/invalide.',
       })
       continue
     }
@@ -198,7 +249,7 @@ async function importContactRecords(records: CsvRecord[]) {
       await createContact({
         email: parsed.data.email,
         fullName: parsed.data.fullName,
-        mobileNumber: normalizedMobileNumber,
+        mobileNumber: normalizedMobileNumber ?? parsed.data.mobileNumber,
         commune: parsed.data.commune,
         country: parsed.data.country,
         firstName: parsed.data.firstName,

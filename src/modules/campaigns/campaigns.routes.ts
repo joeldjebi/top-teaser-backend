@@ -1,11 +1,13 @@
 import { Router } from 'express'
 import { requireAuth } from '../auth/auth.middleware.js'
+import { findCommunicationProviderById } from '../communication-providers/communication-providers.repository.js'
 import { findContactListById } from '../contact-lists/contact-lists.repository.js'
 import { findTemplateById } from '../templates/templates.repository.js'
 import {
   createCampaign,
   deleteCampaign,
   findCampaignById,
+  getCampaignChannelStatuses,
   getCampaignStats,
   listCampaignRecipients,
   listCampaigns,
@@ -23,10 +25,89 @@ import {
   sendCampaign,
   syncCampaignBulkStatus,
 } from './campaigns.service.js'
+import { drainCampaignQueue, enqueueCampaignJob } from './campaigns.queue.js'
+import type {
+  Campaign,
+  CampaignChannel,
+  CampaignSendMode,
+  CreateCampaignInput,
+} from './campaigns.types.js'
 
 export const campaignsRouter = Router()
 
 campaignsRouter.use(requireAuth)
+
+type ChannelConfigInput = {
+  channel: CampaignChannel
+  communicationProviderId?: number | null
+  sendMode?: CampaignSendMode
+}
+
+function normalizeChannelConfigs(
+  input: Pick<
+    CreateCampaignInput,
+    'channel' | 'communicationProviderId' | 'sendMode' | 'channels'
+  >,
+): ChannelConfigInput[] {
+  const channels =
+    input.channels && input.channels.length > 0
+      ? input.channels
+      : [
+          {
+            channel: input.channel ?? 'email',
+            communicationProviderId: input.communicationProviderId ?? null,
+            sendMode: input.sendMode ?? 'single',
+          },
+        ]
+
+  const uniqueChannels = new Set<CampaignChannel>()
+
+  return channels.filter((channel) => {
+    if (uniqueChannels.has(channel.channel)) return false
+    uniqueChannels.add(channel.channel)
+    return true
+  })
+}
+
+async function validateChannelConfigs(channels: ChannelConfigInput[]) {
+  if (channels.length === 0) {
+    return 'Sélectionnez au moins un canal.'
+  }
+
+  for (const channel of channels) {
+    if (channel.channel === 'email') continue
+
+    if (!channel.communicationProviderId) {
+      return `Un provider actif est obligatoire pour le canal ${channel.channel}.`
+    }
+
+    const communicationProvider = await findCommunicationProviderById(
+      channel.communicationProviderId,
+    )
+
+    if (
+      !communicationProvider ||
+      communicationProvider.channel !== channel.channel ||
+      !communicationProvider.isActive
+    ) {
+      return 'Le provider sélectionné est introuvable, inactif ou associé à un autre canal.'
+    }
+  }
+
+  return null
+}
+
+function getCampaignChannelFallback(campaign: Campaign): ChannelConfigInput[] {
+  return campaign.channels.length > 0
+    ? campaign.channels
+    : [
+        {
+          channel: campaign.channel,
+          communicationProviderId: campaign.communicationProviderId,
+          sendMode: campaign.sendMode,
+        },
+      ]
+}
 
 campaignsRouter.get('/', async (_request, response) => {
   response.json({
@@ -57,7 +138,20 @@ campaignsRouter.post('/', async (request, response) => {
     return
   }
 
-  const campaign = await createCampaign(parsed.data)
+  const channels = normalizeChannelConfigs(parsed.data)
+  const channelValidationError = await validateChannelConfigs(channels)
+
+  if (channelValidationError) {
+    response.status(422).json({
+      message: channelValidationError,
+    })
+    return
+  }
+
+  const campaign = await createCampaign({
+    ...parsed.data,
+    channels,
+  })
   wakeCampaignScheduler()
 
   response.status(201).json({
@@ -85,8 +179,6 @@ campaignsRouter.get('/:id', async (request, response) => {
     return
   }
 
-  wakeCampaignScheduler()
-
   response.json({
     data: campaign,
   })
@@ -107,14 +199,61 @@ campaignsRouter.patch('/:id', async (request, response) => {
     return
   }
 
-  const campaign = await updateCampaign(params.data.id, body.data)
+  const existingCampaign = await findCampaignById(params.data.id)
 
-  if (!campaign) {
+  if (!existingCampaign) {
     response.status(404).json({
       message: 'Campaign not found.',
     })
     return
   }
+
+  const shouldValidateChannels =
+    body.data.channels !== undefined ||
+    body.data.channel !== undefined ||
+    body.data.communicationProviderId !== undefined ||
+    body.data.sendMode !== undefined
+  const usesLegacyChannelPatch =
+    body.data.channels === undefined && shouldValidateChannels
+
+  const channels = shouldValidateChannels
+    ? body.data.channels !== undefined
+      ? normalizeChannelConfigs({
+          channel: body.data.channel ?? existingCampaign.channel,
+          communicationProviderId:
+            body.data.communicationProviderId ??
+            existingCampaign.communicationProviderId,
+          sendMode: body.data.sendMode ?? existingCampaign.sendMode,
+          channels: body.data.channels,
+        })
+      : normalizeChannelConfigs({
+          channel: body.data.channel ?? existingCampaign.channel,
+          communicationProviderId:
+            body.data.communicationProviderId ??
+            existingCampaign.communicationProviderId,
+          sendMode: body.data.sendMode ?? existingCampaign.sendMode,
+          channels: usesLegacyChannelPatch
+            ? undefined
+            : getCampaignChannelFallback(existingCampaign),
+        })
+    : undefined
+
+  if (channels) {
+    const channelValidationError = await validateChannelConfigs(channels)
+
+    if (channelValidationError) {
+      response.status(422).json({
+        message: channelValidationError,
+      })
+      return
+    }
+  }
+
+  const campaign = await updateCampaign(params.data.id, {
+    ...body.data,
+    ...(channels ? { channels } : {}),
+  })
+  wakeCampaignScheduler()
 
   response.json({
     data: campaign,
@@ -141,6 +280,8 @@ campaignsRouter.delete('/:id', async (request, response) => {
     return
   }
 
+  wakeCampaignScheduler()
+
   response.status(204).send()
 })
 
@@ -164,8 +305,11 @@ campaignsRouter.post('/:id/prepare', async (request, response) => {
     return
   }
 
+  const result = await prepareCampaign(campaign)
+  wakeCampaignScheduler()
+
   response.json({
-    data: await prepareCampaign(campaign),
+    data: result,
   })
 })
 
@@ -196,8 +340,17 @@ campaignsRouter.post('/:id/send', async (request, response) => {
     return
   }
 
-  response.json({
-    data: await sendCampaign(campaign, 'manual'),
+  const job = enqueueCampaignJob(campaign, 'manual')
+  void drainCampaignQueue(async (queuedCampaign, source) => {
+    await sendCampaign(queuedCampaign, source)
+  })
+
+  response.status(202).json({
+    data: {
+      jobId: job.id,
+      campaign,
+      message: 'Campagne ajoutée à la file d’envoi.',
+    },
   })
 })
 
@@ -222,6 +375,7 @@ campaignsRouter.post('/:id/cancel', async (request, response) => {
   }
 
   await updateCampaignStatus(campaign.id, 'cancelled')
+  wakeCampaignScheduler()
 
   response.json({
     data: await findCampaignById(campaign.id),
@@ -249,7 +403,7 @@ campaignsRouter.get('/:id/bulk-status', async (request, response) => {
   }
 
   response.json({
-    data: await syncCampaignBulkStatus(campaign),
+    data: await syncCampaignBulkStatus(campaign, 'manual'),
   })
 })
 
@@ -275,6 +429,22 @@ campaignsRouter.get('/:id/stats', async (request, response) => {
 
   response.json({
     data: await getCampaignStats(campaign.id),
+  })
+})
+
+campaignsRouter.get('/:id/channel-statuses', async (request, response) => {
+  const parsed = campaignIdParamSchema.safeParse(request.params)
+
+  if (!parsed.success) {
+    response.status(422).json({
+      message: 'Invalid campaign id.',
+      errors: parsed.error.flatten().fieldErrors,
+    })
+    return
+  }
+
+  response.json({
+    data: await getCampaignChannelStatuses(parsed.data.id),
   })
 })
 

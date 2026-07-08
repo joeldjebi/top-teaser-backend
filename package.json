@@ -12,6 +12,16 @@
     "db:add-contact-fields": "tsx src/scripts/20260706-add-contact-profile-fields.ts",
     "db:add-unique-mobile": "tsx src/scripts/20260707-add-unique-mobile-number.ts",
     "db:add-performance-indexes": "tsx src/scripts/20260707-add-performance-indexes.ts",
+    "db:create-communication-providers": "tsx src/scripts/20260707-create-communication-providers.ts",
+    "db:add-campaign-channel-provider": "tsx src/scripts/20260707-add-campaign-channel-provider.ts",
+    "db:create-admin-rbac": "tsx src/scripts/20260707-create-admin-rbac.ts",
+    "db:create-activity-logs": "tsx src/scripts/20260707-create-activity-logs.ts",
+    "db:create-admin-invitations": "tsx src/scripts/20260707-create-admin-invitations.ts",
+    "db:create-locations": "tsx src/scripts/20260708-create-locations.ts",
+    "db:add-telegram-channel": "tsx src/scripts/20260708-add-telegram-channel.ts",
+    "db:create-campaign-channels": "tsx src/scripts/20260708-create-campaign-channels.ts",
+    "db:create-campaign-channel-recipients": "tsx src/scripts/20260708-create-campaign-channel-recipients.ts",
+    "db:create-technical-logs": "tsx src/scripts/20260708-create-technical-logs.ts",
     "create-super-admin": "tsx src/scripts/create-super-admin.ts"
   },
   "dependencies": {

@@ -6,8 +6,20 @@ import { findUserByEmail, findUserById } from './auth.repository.js'
 import type {
   AuthenticatedUser,
   AuthTokenPayload,
+  PermissionMatrix,
   UserWithPassword,
 } from './auth.types.js'
+
+export const fullPermissions: PermissionMatrix = {
+  overview: { create: true, read: true, update: true, delete: true },
+  contacts: { create: true, read: true, update: true, delete: true },
+  contactLists: { create: true, read: true, update: true, delete: true },
+  templates: { create: true, read: true, update: true, delete: true },
+  campaigns: { create: true, read: true, update: true, delete: true },
+  logs: { create: true, read: true, update: true, delete: true },
+  providers: { create: true, read: true, update: true, delete: true },
+  admins: { create: true, read: true, update: true, delete: true },
+}
 
 function sanitizeUser(user: UserWithPassword): AuthenticatedUser {
   return {
@@ -15,6 +27,9 @@ function sanitizeUser(user: UserWithPassword): AuthenticatedUser {
     name: user.name,
     email: user.email,
     role: user.role,
+    roleId: user.roleId,
+    roleName: user.roleName,
+    permissions: user.permissions ?? fullPermissions,
   }
 }
 

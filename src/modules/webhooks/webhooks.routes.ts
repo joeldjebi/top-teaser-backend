@@ -3,7 +3,17 @@ import { z } from 'zod'
 import { createEmailEvent } from './webhooks.repository.js'
 
 const providerParamSchema = z.object({
-  provider: z.enum(['postmark', 'sendgrid', 'mailgun', 'brevo', 'amazon-ses']),
+  provider: z.enum([
+    'postmark',
+    'sendgrid',
+    'mailgun',
+    'brevo',
+    'amazon-ses',
+    'twilio',
+    'meta-whatsapp',
+    'telegram',
+    'generic',
+  ]),
 })
 
 export const webhooksRouter = Router()
@@ -23,12 +33,18 @@ webhooksRouter.post('/:provider', async (request, response) => {
     getString(payload.MessageID) ??
     getString(payload.MessageId) ??
     getString(payload.message_id) ??
+    getString(payload.MessageSid) ??
+    getString(payload.SmsSid) ??
+    getString(payload.sid) ??
     getString(payload.sg_message_id) ??
     getString(payload.id)
   const eventType =
     getString(payload.RecordType) ??
     getString(payload.event) ??
     getString(payload.Event) ??
+    getString(payload.MessageStatus) ??
+    getString(payload.SmsStatus) ??
+    getString(payload.status) ??
     getString(payload.type) ??
     'unknown'
 

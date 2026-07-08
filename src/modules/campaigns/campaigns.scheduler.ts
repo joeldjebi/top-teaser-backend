@@ -1,12 +1,68 @@
-import { getCampaignStats, getNextScheduledCampaignTime, listScheduledCampaignsDueNow, updateCampaign } from './campaigns.repository.js'
-import { prepareCampaign, sendCampaign } from './campaigns.service.js'
+import {
+  getCampaignStats,
+  getNextScheduledCampaignTime,
+  listCampaignsAwaitingBulkStatus,
+  listScheduledCampaignsDueNow,
+  updateCampaign,
+} from './campaigns.repository.js'
+import {
+  drainCampaignQueue,
+  enqueueCampaignJob,
+  getCampaignQueueStatus,
+} from './campaigns.queue.js'
+import { prepareCampaign, sendCampaign, syncCampaignBulkStatus } from './campaigns.service.js'
+import { createTechnicalLog } from '../technical-logs/technical-logs.repository.js'
 
 let isSchedulerRunning = false
+let isExecuting = false
+let shouldRunAfterCurrentExecution = false
 let schedulerTimeout: NodeJS.Timeout | null = null
+let lastRunAt: string | null = null
+let lastRunError: string | null = null
+let nextRunAt: string | null = null
+
+const IDLE_CHECK_DELAY_MS = 5 * 60 * 1000
+const ERROR_RETRY_DELAY_MS = 60 * 1000
+const BULK_STATUS_CHECK_DELAY_MS = 60 * 1000
+const DUE_SOON_THRESHOLD_MS = 60 * 1000
+const DUE_SOON_CHECK_DELAY_MS = 10 * 1000
+const MIN_CHECK_DELAY_MS = 1000
+
+function clearSchedulerTimeout() {
+  if (schedulerTimeout) {
+    clearTimeout(schedulerTimeout)
+    schedulerTimeout = null
+  }
+}
+
+function setNextExecution(delayMs: number, reason: string) {
+  clearSchedulerTimeout()
+  const normalizedDelay = Math.max(delayMs, MIN_CHECK_DELAY_MS)
+  console.log(
+    `[Campaigns] Next scheduler check in ${Math.round(normalizedDelay / 1000)}s (${reason})`,
+  )
+  nextRunAt = new Date(Date.now() + normalizedDelay).toISOString()
+  schedulerTimeout = setTimeout(executeScheduledCampaigns, normalizedDelay)
+}
 
 async function executeScheduledCampaigns() {
+  if (!isSchedulerRunning) {
+    return
+  }
+
+  if (isExecuting) {
+    shouldRunAfterCurrentExecution = true
+    console.log('[Campaigns] Scheduler execution already running, queued one extra check')
+    return
+  }
+
+  clearSchedulerTimeout()
+  isExecuting = true
+
   try {
     const now = new Date()
+    lastRunAt = now.toISOString()
+    lastRunError = null
     console.log(`[Campaigns] Checking for due campaigns at ${now.toISOString()}...`)
 
     const dueCampaigns = await listScheduledCampaignsDueNow()
@@ -25,22 +81,26 @@ async function executeScheduledCampaigns() {
             console.log(
               `[Campaigns] No recipients prepared for campaign ${campaign.id}, preparing now...`,
             )
-            await prepareCampaign(campaign)
-            console.log(`[Campaigns] ✅ Recipients prepared: ${stats.total}`)
+            const preparation = await prepareCampaign(campaign)
+            console.log(
+              `[Campaigns] ✅ Recipients prepared: ${preparation.preparedRecipients}`,
+            )
           }
 
-          console.log(
-            `[Campaigns] Sending campaign ${campaign.id}: "${campaign.name}"`,
-          )
-          const result = await sendCampaign(campaign, 'cron')
-          console.log(
-            `[Campaigns] Campaign ${campaign.id} finished with status "${result.campaign.status}" (${result.sent} sent, ${result.failed} failed)`,
-          )
+          enqueueCampaignJob(campaign, 'cron')
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error)
           console.error(
             `[Campaigns] ❌ Error sending campaign ${campaign.id}: ${errorMessage}`,
           )
+          await createTechnicalLog({
+            level: 'error',
+            scope: 'scheduler',
+            event: 'campaign_enqueue_failed',
+            message: `Erreur scheduler sur la campagne ${campaign.id}.`,
+            campaignId: campaign.id,
+            error: errorMessage,
+          })
 
           // Record the error in the database
           try {
@@ -59,61 +119,108 @@ async function executeScheduledCampaigns() {
           }
         }
       }
+
+      await drainCampaignQueue(async (campaign, source) => {
+        console.log(
+          `[Campaigns] Sending queued campaign ${campaign.id}: "${campaign.name}"`,
+        )
+        const result = await sendCampaign(campaign, source)
+        console.log(
+          `[Campaigns] Campaign ${campaign.id} finished with status "${result.campaign.status}" (${result.sent} sent, ${result.failed} failed)`,
+        )
+      })
+    }
+
+    const bulkCampaigns = await listCampaignsAwaitingBulkStatus()
+    console.log(
+      `[Campaigns] Found ${bulkCampaigns.length} bulk campaign(s) awaiting status sync`,
+    )
+
+    for (const campaign of bulkCampaigns) {
+      try {
+        console.log(
+          `[Campaigns] Syncing bulk status for campaign ${campaign.id}: "${campaign.name}"`,
+        )
+        const result = await syncCampaignBulkStatus(campaign, 'cron')
+        console.log(
+          `[Campaigns] Bulk campaign ${campaign.id} status is "${result.campaign.status}" (${result.bulkStatus.status})`,
+        )
+      } catch (error) {
+        console.error(
+          `[Campaigns] Unable to sync bulk campaign ${campaign.id}:`,
+          error instanceof Error ? error.message : error,
+        )
+      }
     }
   } catch (error) {
+    lastRunError = error instanceof Error ? error.message : String(error)
     console.error(
       '[Campaigns] ❌ Scheduler error:',
       error instanceof Error ? error.message : error,
     )
+  } finally {
+    isExecuting = false
   }
 
-  // Schedule next check
-  scheduleNextCheck()
+  if (shouldRunAfterCurrentExecution) {
+    shouldRunAfterCurrentExecution = false
+    setNextExecution(MIN_CHECK_DELAY_MS, 'queued wake after running execution')
+    return
+  }
+
+  await scheduleNextCheck()
 }
 
 async function scheduleNextCheck() {
   try {
     const now = new Date()
+    const bulkCampaigns = await listCampaignsAwaitingBulkStatus()
 
     // Find the next scheduled campaign time
     const nextScheduledTime = await getNextScheduledCampaignTime()
 
     if (!nextScheduledTime) {
-      // No upcoming campaigns, check again in 5 minutes
-      const nextCheck = 5 * 60 * 1000
-      console.log(`[Campaigns] No more scheduled campaigns to process, next check in 5 minutes`)
-      schedulerTimeout = setTimeout(executeScheduledCampaigns, nextCheck)
+      setNextExecution(
+        bulkCampaigns.length > 0 ? BULK_STATUS_CHECK_DELAY_MS : IDLE_CHECK_DELAY_MS,
+        bulkCampaigns.length > 0
+          ? 'bulk campaigns awaiting status sync'
+          : 'no upcoming scheduled campaign',
+      )
       return
     }
 
     const timeUntilExecution = nextScheduledTime.getTime() - now.getTime()
 
     if (timeUntilExecution <= 0) {
-      // Campaign is due now, check immediately
-      console.log(`[Campaigns] Campaign is due now, executing immediately`)
-      await executeScheduledCampaigns()
-    } else if (timeUntilExecution < 60000) {
-      // Campaign will be due soon (less than 1 minute), check in 10 seconds
-      const nextCheck = 10 * 1000
-      console.log(
-        `[Campaigns] Next campaign due in ${Math.round(timeUntilExecution / 1000)}s, checking again in 10s`,
+      setNextExecution(MIN_CHECK_DELAY_MS, 'campaign already due')
+    } else if (timeUntilExecution < DUE_SOON_THRESHOLD_MS) {
+      setNextExecution(
+        Math.min(DUE_SOON_CHECK_DELAY_MS, timeUntilExecution),
+        `next campaign due in ${Math.round(timeUntilExecution / 1000)}s`,
       )
-      schedulerTimeout = setTimeout(executeScheduledCampaigns, nextCheck)
     } else {
-      // Campaign will be due later, check 1 minute before
-      const nextCheck = Math.max(timeUntilExecution - 60000, 60000)
-      console.log(
-        `[Campaigns] Next campaign due in ${Math.round(timeUntilExecution / 1000)}s, next check in ${Math.round(nextCheck / 1000)}s`,
+      const scheduledWakeDelay = Math.max(
+        timeUntilExecution - DUE_SOON_THRESHOLD_MS,
+        DUE_SOON_THRESHOLD_MS,
       )
-      schedulerTimeout = setTimeout(executeScheduledCampaigns, nextCheck)
+      const nextDelay =
+        bulkCampaigns.length > 0
+          ? Math.min(BULK_STATUS_CHECK_DELAY_MS, scheduledWakeDelay)
+          : scheduledWakeDelay
+
+      setNextExecution(
+        nextDelay,
+        bulkCampaigns.length > 0
+          ? `bulk sync pending and campaign due in ${Math.round(timeUntilExecution / 1000)}s`
+          : `wake one minute before campaign due in ${Math.round(timeUntilExecution / 1000)}s`,
+      )
     }
   } catch (error) {
     console.error(
       '[Campaigns] Error scheduling next check:',
       error instanceof Error ? error.message : error,
     )
-    // Fall back to checking again in 1 minute if there's an error
-    schedulerTimeout = setTimeout(executeScheduledCampaigns, 60000)
+    setNextExecution(ERROR_RETRY_DELAY_MS, 'scheduler planning error')
   }
 }
 
@@ -126,8 +233,7 @@ export function startCampaignScheduler() {
   isSchedulerRunning = true
   console.log('[Campaigns] Scheduler started (intelligent mode)')
 
-  // Start the first check immediately
-  void executeScheduledCampaigns()
+  setNextExecution(MIN_CHECK_DELAY_MS, 'startup')
 }
 
 export function wakeCampaignScheduler() {
@@ -135,20 +241,32 @@ export function wakeCampaignScheduler() {
     return
   }
 
-  if (schedulerTimeout) {
-    clearTimeout(schedulerTimeout)
-    schedulerTimeout = null
+  if (isExecuting) {
+    shouldRunAfterCurrentExecution = true
+    console.log('[Campaigns] Scheduler wake queued because execution is running')
+    return
   }
 
   console.log('[Campaigns] Scheduler awakened after campaign planning change')
-  schedulerTimeout = setTimeout(executeScheduledCampaigns, 1000)
+  setNextExecution(MIN_CHECK_DELAY_MS, 'campaign planning change')
 }
 
 export function stopCampaignScheduler() {
-  if (schedulerTimeout) {
-    clearTimeout(schedulerTimeout)
-    schedulerTimeout = null
-  }
+  clearSchedulerTimeout()
   isSchedulerRunning = false
+  isExecuting = false
+  shouldRunAfterCurrentExecution = false
   console.log('[Campaigns] Scheduler stopped')
+}
+
+export function getCampaignSchedulerStatus() {
+  return {
+    isRunning: isSchedulerRunning,
+    isExecuting,
+    lastRunAt,
+    lastRunError,
+    nextRunAt,
+    queue: getCampaignQueueStatus(),
+    hasPendingWake: shouldRunAfterCurrentExecution,
+  }
 }

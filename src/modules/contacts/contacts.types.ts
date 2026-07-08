@@ -18,7 +18,7 @@ export type Contact = {
 export type CreateContactInput = {
   email: string
   fullName?: string | null
-  mobileNumber?: string | null
+  mobileNumber: string
   commune?: string | null
   country?: string | null
   firstName?: string | null
@@ -26,6 +26,14 @@ export type CreateContactInput = {
   status?: ContactStatus
 }
 
-export type UpdateContactInput = Partial<CreateContactInput> & {
+export type UpdateContactInput = {
+  email?: string
+  fullName?: string | null
+  mobileNumber?: string | null
+  commune?: string | null
+  country?: string | null
+  firstName?: string | null
+  lastName?: string | null
+  status?: ContactStatus
   unsubscribedAt?: string | null
 }

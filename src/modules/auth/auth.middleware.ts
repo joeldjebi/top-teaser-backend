@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from 'express'
 import { getUserFromToken } from './auth.service.js'
+import type { PermissionResource } from './auth.types.js'
 
 export async function requireAuth(
   request: Request,
@@ -34,5 +35,23 @@ export async function requireAuth(
     response.status(401).json({
       message: 'Invalid authentication token.',
     })
+  }
+}
+
+export function requirePermission(
+  resource: PermissionResource,
+  action: 'create' | 'read' | 'update' | 'delete',
+) {
+  return (_request: Request, response: Response, next: NextFunction) => {
+    const user = response.locals.user
+
+    if (!user?.permissions?.[resource]?.[action]) {
+      response.status(403).json({
+        message: 'Permission insuffisante.',
+      })
+      return
+    }
+
+    next()
   }
 }

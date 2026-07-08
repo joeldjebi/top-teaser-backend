@@ -1,18 +1,35 @@
 import { getMailSetting } from '../mail/mail-settings.service.js'
 import { getMailProvider } from '../mail/providers/provider-registry.js'
+import { findCommunicationProviderById } from '../communication-providers/communication-providers.repository.js'
+import type { CommunicationProvider } from '../communication-providers/communication-providers.types.js'
 import { findTemplateById } from '../templates/templates.repository.js'
 import { renderTemplate } from '../templates/templates.renderer.js'
-import type { Campaign } from './campaigns.types.js'
+import { createTechnicalLog } from '../technical-logs/technical-logs.repository.js'
+import { createUnsubscribeToken } from '../unsubscribes/unsubscribe-token.js'
+import { env } from '../../config/env.js'
+import type {
+  Campaign,
+  CampaignChannelConfig,
+  CampaignChannelRecipient,
+} from './campaigns.types.js'
 import {
+  attachCampaignChannelRecipientProviderMessage,
   attachRecipientProviderMessage,
   findCampaignById,
   getCampaignStats,
   listCampaignRecipients,
+  listPendingCampaignChannelRecipients,
   listPendingCampaignRecipients,
+  markCampaignChannelRecipientFailed,
+  markCampaignChannelRecipientSent,
+  markCampaignChannelRecipientsFailedByProviderRequest,
+  markCampaignChannelRecipientsSentByProviderRequest,
   markRecipientFailed,
   markRecipientSent,
+  prepareCampaignChannelRecipients,
   prepareCampaignRecipients,
   updateCampaign,
+  updateCampaignChannelStatus,
   updateCampaignStatus,
 } from './campaigns.repository.js'
 
@@ -29,11 +46,127 @@ export async function prepareCampaign(campaign: Campaign) {
 }
 
 type CampaignSendSource = 'manual' | 'cron'
+type ChannelExecutionResult = {
+  sent: number
+  failed: number
+  errorMessage?: string | null
+  pending?: boolean
+}
 
 export async function sendCampaign(
   campaign: Campaign,
   source: CampaignSendSource = 'manual',
 ) {
+  await updateCampaignStatus(campaign.id, 'sending')
+
+  const stats = await getCampaignStats(campaign.id)
+  if (stats.total === 0) {
+    await prepareCampaignRecipients(campaign)
+  }
+
+  const channels = campaign.channels.length > 0
+    ? campaign.channels
+    : [
+        {
+          id: 0,
+          campaignId: campaign.id,
+          channel: campaign.channel,
+          communicationProviderId: campaign.communicationProviderId,
+          sendMode: campaign.sendMode,
+          status: campaign.status,
+          errorMessage: campaign.errorMessage,
+          createdAt: campaign.createdAt,
+          updatedAt: campaign.updatedAt,
+        },
+      ]
+
+  let sent = 0
+  let failed = 0
+  let pending = false
+  const errors: string[] = []
+
+  for (const channel of channels) {
+    if (!channel.id) {
+      errors.push(`Canal ${channel.channel} sans identifiant technique.`)
+      failed += 1
+      continue
+    }
+
+    try {
+      await updateCampaignChannelStatus({
+        campaignChannelId: channel.id,
+        status: 'sending',
+        errorMessage: null,
+      })
+
+      const result =
+        channel.channel === 'email'
+          ? await sendEmailCampaignChannel(campaign, channel, source)
+          : await sendCommunicationCampaignChannel(campaign, channel, source)
+
+      sent += result.sent
+      failed += result.failed
+      pending = pending || Boolean(result.pending)
+
+      await updateCampaignChannelStatus({
+        campaignChannelId: channel.id,
+        status: result.pending
+          ? 'sending'
+          : result.failed > 0 && result.sent === 0
+            ? 'failed'
+            : 'sent',
+        errorMessage: result.errorMessage,
+      })
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Échec du canal.'
+      failed += 1
+      errors.push(`${formatChannelLabel(channel.channel)} : ${errorMessage}`)
+      await updateCampaignChannelStatus({
+        campaignChannelId: channel.id,
+        status: 'failed',
+        errorMessage,
+      })
+    }
+  }
+
+  const finalStatus = pending ? 'sending' : sent > 0 ? 'sent' : 'failed'
+  const errorMessage =
+    errors.length > 0
+      ? `${errors.length} canal(aux) en erreur : ${errors.join(' | ')}`
+      : null
+
+  await updateCampaign(campaign.id, {
+    status: finalStatus,
+    errorMessage,
+  })
+
+  const updatedCampaign = await findCampaignById(campaign.id)
+
+  return {
+    campaign: updatedCampaign ?? campaign,
+    sent,
+    failed,
+    stats: await getCampaignStats(campaign.id),
+  }
+}
+
+async function sendEmailCampaignChannel(
+  campaign: Campaign,
+  selectedEmailChannel: CampaignChannelConfig,
+  source: CampaignSendSource = 'manual',
+): Promise<ChannelExecutionResult> {
+  const emailChannel =
+    campaign.channels.find((channel) => channel.channel === 'email') ??
+    selectedEmailChannel
+
+  if (!emailChannel) {
+    throw new Error(
+      'Aucun canal email n’est configuré pour cette campagne. Les moteurs SMS, WhatsApp et Telegram seront branchés dans l’étape multicanal.',
+    )
+  }
+
+  const emailSendMode = emailChannel.sendMode
   const template = await findTemplateById(campaign.templateId)
 
   if (!template) {
@@ -43,7 +176,16 @@ export async function sendCampaign(
   await updateCampaignStatus(campaign.id, 'sending')
 
   const provider = await getMailProvider()
-  let recipients = await listPendingCampaignRecipients(campaign.id)
+  if (selectedEmailChannel.id) {
+    await prepareCampaignChannelRecipients({
+      campaignId: campaign.id,
+      campaignChannelId: selectedEmailChannel.id,
+    })
+  }
+
+  let recipients = selectedEmailChannel.id
+    ? await listPendingCampaignChannelRecipients(selectedEmailChannel.id)
+    : await listPendingCampaignRecipients(campaign.id)
   let sent = 0
   let failed = 0
   let bulkErrorMessage = ''
@@ -51,7 +193,15 @@ export async function sendCampaign(
 
   if (recipients.length === 0) {
     await prepareCampaignRecipients(campaign)
-    recipients = await listPendingCampaignRecipients(campaign.id)
+    if (selectedEmailChannel.id) {
+      await prepareCampaignChannelRecipients({
+        campaignId: campaign.id,
+        campaignChannelId: selectedEmailChannel.id,
+      })
+    }
+    recipients = selectedEmailChannel.id
+      ? await listPendingCampaignChannelRecipients(selectedEmailChannel.id)
+      : await listPendingCampaignRecipients(campaign.id)
   }
 
   if (recipients.length === 0) {
@@ -63,26 +213,23 @@ export async function sendCampaign(
       errorMessage,
     })
 
-    const updatedCampaign = await findCampaignById(campaign.id)
-
     return {
-      campaign: updatedCampaign ?? campaign,
       sent,
       failed,
-      stats: await getCampaignStats(campaign.id),
+      errorMessage,
     }
   }
 
   const sendBulk = provider.sendBulk?.bind(provider)
-  const canUseBulk = Boolean(sendBulk) && campaign.sendMode === 'bulk'
+  const canUseBulk = Boolean(sendBulk) && emailSendMode === 'bulk'
 
-  if (campaign.sendMode === 'bulk' && !isPostmarkModeEnabled('bulk')) {
+  if (emailSendMode === 'bulk' && !isPostmarkModeEnabled('bulk')) {
     throw new Error(
       'Le mode Bulk Postmark est désactivé. Activez-le dans Providers ou choisissez le mode classique.',
     )
   }
 
-  if (campaign.sendMode === 'single' && !isPostmarkModeEnabled('single')) {
+  if (emailSendMode === 'single' && !isPostmarkModeEnabled('single')) {
     throw new Error(
       'Le mode classique Postmark est désactivé. Activez-le dans Providers ou choisissez un autre mode.',
     )
@@ -151,6 +298,13 @@ export async function sendCampaign(
           recipientId: recipient.id,
           providerMessageId: `${bulkRequestId}:${recipient.id}`,
         })
+        const channelRecipientId = getChannelRecipientId(recipient)
+        if (channelRecipientId) {
+          await attachCampaignChannelRecipientProviderMessage({
+            channelRecipientId,
+            providerMessageId: `${bulkRequestId}:${recipient.id}`,
+          })
+        }
       }
 
       if (result.status === 'failed') {
@@ -173,6 +327,13 @@ export async function sendCampaign(
           recipientId: recipient.id,
           errorMessage: bulkErrorMessage,
         })
+        const channelRecipientId = getChannelRecipientId(recipient)
+        if (channelRecipientId) {
+          await markCampaignChannelRecipientFailed({
+            channelRecipientId,
+            errorMessage: bulkErrorMessage,
+          })
+        }
       }
 
       failed = recipients.length
@@ -190,22 +351,30 @@ export async function sendCampaign(
           'Postmark a accepté la requête Bulk. Le statut final sera synchronisé automatiquement.',
       })
     }
-    const updatedCampaign = await findCampaignById(campaign.id)
-
     return {
-      campaign: updatedCampaign ?? campaign,
       sent,
       failed,
-      stats: await getCampaignStats(campaign.id),
+      errorMessage:
+        failed > 0
+          ? bulkErrorMessage || 'Email provider bulk send failed.'
+          : null,
+      pending: failed === 0,
     }
   }
 
-  if (campaign.sendMode === 'bulk' && !provider.sendBulk) {
+  if (emailSendMode === 'bulk' && !provider.sendBulk) {
     throw new Error('Le provider actif ne supporte pas l’envoi Bulk.')
   }
 
   for (const recipient of recipients) {
-    const rendered = renderTemplate(template, getTemplateVariables(recipient.contact))
+    const templateVariables = getTemplateVariables(recipient.contact)
+    const rendered = renderTemplate(
+      {
+        ...template,
+        subject: campaign.subject || template.subject,
+      },
+      templateVariables,
+    )
 
     try {
       const payload = {
@@ -221,7 +390,7 @@ export async function sendCampaign(
               .join(' ') ||
             undefined,
         },
-        subject: campaign.subject || rendered.subject,
+        subject: rendered.subject,
         html: rendered.html,
         text: rendered.text ?? undefined,
         metadata: {
@@ -256,6 +425,13 @@ export async function sendCampaign(
         recipientId: recipient.id,
         providerMessageId: result.providerMessageId,
       })
+      const channelRecipientId = getChannelRecipientId(recipient)
+      if (channelRecipientId) {
+        await markCampaignChannelRecipientSent({
+          channelRecipientId,
+          providerMessageId: result.providerMessageId,
+        })
+      }
       sent += 1
     } catch (error) {
       const errorMessage =
@@ -274,6 +450,13 @@ export async function sendCampaign(
         recipientId: recipient.id,
         errorMessage,
       })
+      const channelRecipientId = getChannelRecipientId(recipient)
+      if (channelRecipientId) {
+        await markCampaignChannelRecipientFailed({
+          channelRecipientId,
+          errorMessage,
+        })
+      }
       failed += 1
     }
   }
@@ -299,17 +482,220 @@ export async function sendCampaign(
   } else {
     await updateCampaignStatus(campaign.id, 'sent')
   }
-  const updatedCampaign = await findCampaignById(campaign.id)
-
   return {
-    campaign: updatedCampaign ?? campaign,
     sent,
     failed,
-    stats: await getCampaignStats(campaign.id),
+    errorMessage: recipientErrors[0] ?? null,
   }
 }
 
-export async function syncCampaignBulkStatus(campaign: Campaign) {
+async function sendCommunicationCampaignChannel(
+  campaign: Campaign,
+  channel: CampaignChannelConfig,
+  source: CampaignSendSource,
+): Promise<ChannelExecutionResult> {
+  if (!channel.communicationProviderId) {
+    throw new Error(`Aucun provider configuré pour le canal ${channel.channel}.`)
+  }
+
+  const [provider, template] = await Promise.all([
+    findCommunicationProviderById(channel.communicationProviderId),
+    findTemplateById(campaign.templateId),
+  ])
+
+  if (!provider || !provider.isActive || provider.channel !== channel.channel) {
+    throw new Error('Provider introuvable, inactif ou associé à un autre canal.')
+  }
+
+  if (!template) {
+    throw new Error('Campaign template not found.')
+  }
+
+  await prepareCampaignChannelRecipients({
+    campaignId: campaign.id,
+    campaignChannelId: channel.id,
+  })
+
+  const recipients = await listPendingCampaignChannelRecipients(channel.id)
+  let sent = 0
+  let failed = 0
+  const errors: string[] = []
+
+  for (const recipient of recipients) {
+    const variables = getTemplateVariables(recipient.contact)
+    const rendered = renderTemplate(
+      {
+        ...template,
+        subject: campaign.subject || template.subject,
+      },
+      variables,
+    )
+    const message = normalizeMessageText(rendered.text ?? rendered.html)
+
+    try {
+      const response = await sendCommunicationMessage({
+        campaign,
+        channel,
+        message,
+        provider,
+        recipient,
+        source,
+      })
+
+      await markCampaignChannelRecipientSent({
+        channelRecipientId: recipient.channelRecipientId,
+        providerMessageId: response.providerMessageId,
+      })
+      sent += 1
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : 'Échec d’envoi multicanal.'
+      errors.push(errorMessage)
+      await markCampaignChannelRecipientFailed({
+        channelRecipientId: recipient.channelRecipientId,
+        errorMessage,
+      })
+      failed += 1
+    }
+  }
+
+  return {
+    sent,
+    failed,
+    errorMessage: errors[0] ?? null,
+  }
+}
+
+async function sendCommunicationMessage(input: {
+  campaign: Campaign
+  channel: CampaignChannelConfig
+  message: string
+  provider: CommunicationProvider
+  recipient: CampaignChannelRecipient
+  source: CampaignSendSource
+}) {
+  const payload = buildCommunicationPayload(input)
+  const endpoint = getCommunicationEndpoint(input.provider, input.recipient)
+  const headers = buildCommunicationHeaders(input.provider)
+
+  logCampaignPayload({
+    campaign: input.campaign,
+    channel: input.channel.channel,
+    mode: 'single',
+    payload,
+    providerName: input.provider.name,
+    recipientCount: 1,
+    source: input.source,
+  })
+
+  const response = await fetch(endpoint, {
+    body: JSON.stringify(payload),
+    headers,
+    method: getProviderVariable(input.provider, 'method') ?? 'POST',
+  })
+  const text = await response.text()
+  const data = parseProviderResponse(text)
+
+  logCampaignResponse({
+    campaign: input.campaign,
+    channel: input.channel.channel,
+    mode: 'single',
+    response: data,
+    source: input.source,
+  })
+
+  if (!response.ok) {
+    throw new Error(
+      `${formatChannelLabel(input.channel.channel)} provider error (${response.status}): ${text || response.statusText}`,
+    )
+  }
+
+  return {
+    providerMessageId:
+      extractProviderMessageId(data) ??
+      `${input.channel.channel}:${input.recipient.channelRecipientId}`,
+  }
+}
+
+function getCommunicationEndpoint(
+  provider: CommunicationProvider,
+  recipient: CampaignChannelRecipient,
+) {
+  if (provider.channel === 'telegram') {
+    const botToken = getProviderVariable(provider, 'bot_token')
+    if (botToken) {
+      return `https://api.telegram.org/bot${botToken}/sendMessage`
+    }
+  }
+
+  const endpoint =
+    getProviderVariable(provider, 'api_url') ??
+    getProviderVariable(provider, 'endpoint_url') ??
+    getProviderVariable(provider, 'url')
+
+  if (!endpoint) {
+    throw new Error(
+      `Configurez la variable api_url sur le provider ${provider.name}.`,
+    )
+  }
+
+  return renderStringTemplate(endpoint, {
+    ...getTemplateVariables(recipient.contact),
+    providerKey: provider.providerKey,
+  })
+}
+
+function buildCommunicationPayload(input: {
+  message: string
+  provider: CommunicationProvider
+  recipient: CampaignChannelRecipient
+}) {
+  const recipientValue = getRecipientValue(input.provider, input.recipient)
+  const customPayload = getProviderVariable(input.provider, 'payload_json')
+
+  if (customPayload) {
+    return parseJsonPayload(
+      renderStringTemplate(customPayload, {
+        ...getTemplateVariables(input.recipient.contact),
+        message: input.message,
+        recipient: recipientValue,
+      }),
+    )
+  }
+
+  if (input.provider.channel === 'telegram') {
+    return {
+      chat_id: recipientValue,
+      text: input.message,
+      parse_mode: getProviderVariable(input.provider, 'parse_mode') ?? undefined,
+    }
+  }
+
+  if (input.provider.channel === 'whatsapp') {
+    return {
+      messaging_product: 'whatsapp',
+      to: recipientValue,
+      type: 'text',
+      text: {
+        body: input.message,
+      },
+    }
+  }
+
+  return {
+    from:
+      getProviderVariable(input.provider, 'from') ??
+      getProviderVariable(input.provider, 'sender') ??
+      undefined,
+    message: input.message,
+    to: recipientValue,
+  }
+}
+
+export async function syncCampaignBulkStatus(
+  campaign: Campaign,
+  source: CampaignSendSource = 'manual',
+) {
   const provider = await getMailProvider()
 
   if (!provider.getBulkStatus) {
@@ -331,7 +717,7 @@ export async function syncCampaignBulkStatus(campaign: Campaign) {
     campaign,
     mode: 'bulk',
     response: bulkStatus,
-    source: 'manual',
+    source,
   })
 
   if (bulkStatus.status === 'completed') {
@@ -348,6 +734,21 @@ export async function syncCampaignBulkStatus(campaign: Campaign) {
       status: 'sent',
       errorMessage: null,
     })
+
+    const emailChannel = campaign.channels.find(
+      (channel) => channel.channel === 'email',
+    )
+    if (emailChannel) {
+      await markCampaignChannelRecipientsSentByProviderRequest({
+        campaignId: campaign.id,
+        providerRequestId: bulkRequestId,
+      })
+      await updateCampaignChannelStatus({
+        campaignChannelId: emailChannel.id,
+        status: 'sent',
+        errorMessage: null,
+      })
+    }
   }
 
   if (bulkStatus.status === 'failed') {
@@ -366,6 +767,22 @@ export async function syncCampaignBulkStatus(campaign: Campaign) {
       status: 'failed',
       errorMessage,
     })
+
+    const emailChannel = campaign.channels.find(
+      (channel) => channel.channel === 'email',
+    )
+    if (emailChannel) {
+      await markCampaignChannelRecipientsFailedByProviderRequest({
+        campaignId: campaign.id,
+        providerRequestId: bulkRequestId,
+        errorMessage,
+      })
+      await updateCampaignChannelStatus({
+        campaignChannelId: emailChannel.id,
+        status: 'failed',
+        errorMessage,
+      })
+    }
   }
 
   return {
@@ -383,8 +800,132 @@ function isPostmarkModeEnabled(mode: 'single' | 'bulk') {
   return value !== 'false' && value !== '0' && value !== 'off'
 }
 
+function getChannelRecipientId(recipient: unknown) {
+  const value =
+    recipient && typeof recipient === 'object'
+      ? (recipient as { channelRecipientId?: unknown }).channelRecipientId
+      : undefined
+
+  return typeof value === 'number'
+    ? value
+    : null
+}
+
+function buildCommunicationHeaders(provider: CommunicationProvider) {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  }
+  const authHeader = getProviderVariable(provider, 'auth_header')
+  const apiKey = getProviderVariable(provider, 'api_key')
+  const bearerToken = getProviderVariable(provider, 'bearer_token')
+
+  if (authHeader) {
+    headers.Authorization = authHeader
+  } else if (bearerToken) {
+    headers.Authorization = `Bearer ${bearerToken}`
+  } else if (apiKey) {
+    headers.Authorization = `Bearer ${apiKey}`
+  }
+
+  return headers
+}
+
+function getRecipientValue(
+  provider: CommunicationProvider,
+  recipient: CampaignChannelRecipient,
+) {
+  const variables = getTemplateVariables(recipient.contact)
+  const configuredValue =
+    getProviderVariable(provider, 'recipient') ??
+    getProviderVariable(provider, 'to') ??
+    getProviderVariable(provider, 'chat_id')
+
+  if (configuredValue) {
+    return renderStringTemplate(configuredValue, variables)
+  }
+
+  return recipient.contact.mobileNumber ?? recipient.contact.email
+}
+
+function getProviderVariable(
+  provider: CommunicationProvider,
+  key: string,
+): string | undefined {
+  const value = provider.variables.find((variable) => variable.key === key)?.value
+
+  return value && value.trim().length > 0 ? value.trim() : undefined
+}
+
+function normalizeMessageText(content: string) {
+  return content
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function renderStringTemplate(
+  content: string,
+  variables: Record<string, string | number>,
+) {
+  return Object.entries(variables).reduce(
+    (current, [key, value]) =>
+      current.replace(new RegExp(`{{\\s*${key}\\s*}}`, 'g'), String(value)),
+    content,
+  )
+}
+
+function parseProviderResponse(text: string) {
+  if (!text) return null
+
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return text
+  }
+}
+
+function parseJsonPayload(value: string) {
+  try {
+    return JSON.parse(value) as unknown
+  } catch {
+    throw new Error('payload_json doit être un JSON valide après remplacement des variables.')
+  }
+}
+
+function extractProviderMessageId(response: unknown): string | undefined {
+  if (!response || typeof response !== 'object') return undefined
+
+  const record = response as Record<string, unknown>
+  const messageId =
+    record.message_id ??
+    record.messageId ??
+    record.id ??
+    (Array.isArray(record.messages) && record.messages[0]
+      ? (record.messages[0] as Record<string, unknown>).id
+      : undefined) ??
+    (record.result && typeof record.result === 'object'
+      ? (record.result as Record<string, unknown>).message_id
+      : undefined)
+
+  return messageId ? String(messageId) : undefined
+}
+
+function formatChannelLabel(channel: CampaignChannelConfig['channel']) {
+  const labels: Record<CampaignChannelConfig['channel'], string> = {
+    email: 'Email',
+    sms: 'SMS',
+    whatsapp: 'WhatsApp',
+    telegram: 'Telegram',
+  }
+
+  return labels[channel]
+}
+
 function logCampaignPayload(input: {
   campaign: Campaign
+  channel?: CampaignChannelConfig['channel']
   mode: 'bulk' | 'single'
   payload: unknown
   providerName: string
@@ -392,22 +933,40 @@ function logCampaignPayload(input: {
   source: CampaignSendSource
 }) {
   console.log(
-    `[Campaigns][${input.source}] Sending ${input.mode} campaign ${input.campaign.id} with ${input.providerName} (${input.recipientCount} recipient(s))...`,
+    `[Campaigns][${input.source}] Sending ${input.channel ?? 'email'} ${input.mode} campaign ${input.campaign.id} with ${input.providerName} (${input.recipientCount} recipient(s))...`,
   )
   console.log(
     `[Campaigns][${input.source}] Payload: ${JSON.stringify(input.payload, null, 2)}`,
   )
+  void createTechnicalLog({
+    level: 'debug',
+    scope: 'campaign_send',
+    event: 'provider_payload',
+    message: `Payload ${input.channel ?? 'email'} envoyé à ${input.providerName}.`,
+    campaignId: input.campaign.id,
+    provider: input.providerName,
+    payload: input.payload,
+  }).catch(() => undefined)
 }
 
 function logCampaignResponse(input: {
   campaign: Campaign
+  channel?: CampaignChannelConfig['channel']
   mode: 'bulk' | 'single'
   response: unknown
   source: CampaignSendSource
 }) {
   console.log(
-    `[Campaigns][${input.source}] ${input.mode} campaign ${input.campaign.id} API response: ${JSON.stringify(input.response, null, 2)}`,
+    `[Campaigns][${input.source}] ${input.channel ?? 'email'} ${input.mode} campaign ${input.campaign.id} API response: ${JSON.stringify(input.response, null, 2)}`,
   )
+  void createTechnicalLog({
+    level: 'info',
+    scope: 'campaign_send',
+    event: 'provider_response',
+    message: `Réponse provider pour la campagne ${input.campaign.id}.`,
+    campaignId: input.campaign.id,
+    response: input.response,
+  }).catch(() => undefined)
 }
 
 function logCampaignError(input: {
@@ -430,13 +989,23 @@ function logCampaignError(input: {
     console.error(
       `[Campaigns][${input.source}] Error response: ${JSON.stringify(providerResponse, null, 2)}`,
     )
-    return
+  } else {
+    console.error(`[Campaigns][${input.source}] Error details:`, input.error)
   }
 
-  console.error(`[Campaigns][${input.source}] Error details:`, input.error)
+  void createTechnicalLog({
+    level: 'error',
+    scope: 'campaign_send',
+    event: 'provider_error',
+    message: input.message,
+    campaignId: input.campaign.id,
+    error: input.error instanceof Error ? input.error.stack ?? input.error.message : String(input.error),
+    response: providerResponse,
+  }).catch(() => undefined)
 }
 
 function getTemplateVariables(contact: {
+  id?: number
   email: string
   fullName: string | null
   mobileNumber: string | null
@@ -445,13 +1014,35 @@ function getTemplateVariables(contact: {
   firstName: string | null
   lastName: string | null
 }) {
+  const fullName =
+    contact.fullName ||
+    [contact.firstName, contact.lastName].filter(Boolean).join(' ') ||
+    ''
+  const firstName = contact.firstName || fullName.split(' ')[0] || ''
+  const lastName =
+    contact.lastName ||
+    fullName
+      .split(' ')
+      .slice(1)
+      .join(' ') ||
+    ''
+  const unsubscribeToken = createUnsubscribeToken(contact.email)
+  const unsubscribeUrl = `${env.appUrl.replace(/\/$/, '')}/unsubscribe/${unsubscribeToken}`
+
   return {
     email: contact.email,
-    fullName: contact.fullName,
-    mobileNumber: contact.mobileNumber,
-    commune: contact.commune,
-    country: contact.country,
-    firstName: contact.firstName,
-    lastName: contact.lastName,
+    fullName,
+    mobileNumber: contact.mobileNumber ?? '',
+    commune: contact.commune ?? '',
+    country: contact.country ?? '',
+    firstName,
+    lastName,
+    unsubscribeUrl,
+    contactId: contact.id ?? '',
+    nomPrenoms: fullName,
+    nomEtPrenoms: fullName,
+    numeroMobile: contact.mobileNumber ?? '',
+    telephone: contact.mobileNumber ?? '',
+    pays: contact.country ?? '',
   }
 }
