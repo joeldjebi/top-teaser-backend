@@ -9,8 +9,16 @@ type UserRow = RowDataPacket & {
   password_hash: string
   role: 'admin' | 'super_admin'
   role_id: number | null
-  role_name: string | null
+}
+
+type RoleRow = RowDataPacket & {
+  name: string | null
   permissions_json: string | PermissionMatrix | null
+}
+
+type UserLookup = {
+  id?: number
+  email?: string
 }
 
 function parsePermissions(value: string | PermissionMatrix | null): PermissionMatrix | null {
@@ -25,46 +33,41 @@ function parsePermissions(value: string | PermissionMatrix | null): PermissionMa
   return value
 }
 
-export async function findUserByEmail(
-  email: string,
-): Promise<UserWithPassword | null> {
-  const [rows] = await db.execute<UserRow[]>(
-    `SELECT u.id, u.name, u.email, u.password_hash, u.role, u.role_id,
-            ar.name AS role_name, ar.permissions_json
-     FROM users u
-     LEFT JOIN admin_roles ar ON ar.id = u.role_id
-     WHERE u.email = ?
-     LIMIT 1`,
-    [email],
-  )
-
-  const user = rows[0]
-
-  if (!user) {
+async function findRole(roleId: number | null) {
+  if (!roleId) {
     return null
   }
 
-  return {
-    id: user.id,
-    name: user.name,
-    email: user.email,
-    passwordHash: user.password_hash,
-    role: user.role,
-    roleId: user.role_id,
-    roleName: user.role_name ?? (user.role === 'super_admin' ? 'Super admin' : 'Admin'),
-    permissions: parsePermissions(user.permissions_json),
+  try {
+    const [rows] = await db.execute<RoleRow[]>(
+      `SELECT name, permissions_json
+       FROM admin_roles
+       WHERE id = ?
+       LIMIT 1`,
+      [roleId],
+    )
+
+    return rows[0] ?? null
+  } catch (error) {
+    console.warn('[Auth] Unable to load admin role:', error)
+    return null
   }
 }
 
-export async function findUserById(id: number): Promise<UserWithPassword | null> {
+async function findUser(where: UserLookup): Promise<UserWithPassword | null> {
+  const isEmailLookup = where.email !== undefined
+  const lookupValue = isEmailLookup ? where.email : where.id
+
+  if (lookupValue === undefined) {
+    return null
+  }
+
   const [rows] = await db.execute<UserRow[]>(
-    `SELECT u.id, u.name, u.email, u.password_hash, u.role, u.role_id,
-            ar.name AS role_name, ar.permissions_json
-     FROM users u
-     LEFT JOIN admin_roles ar ON ar.id = u.role_id
-     WHERE u.id = ?
+    `SELECT id, name, email, password_hash, role, role_id
+     FROM users
+     WHERE ${isEmailLookup ? 'email' : 'id'} = ?
      LIMIT 1`,
-    [id],
+    [lookupValue],
   )
 
   const user = rows[0]
@@ -73,6 +76,8 @@ export async function findUserById(id: number): Promise<UserWithPassword | null>
     return null
   }
 
+  const role = await findRole(user.role_id)
+
   return {
     id: user.id,
     name: user.name,
@@ -80,7 +85,17 @@ export async function findUserById(id: number): Promise<UserWithPassword | null>
     passwordHash: user.password_hash,
     role: user.role,
     roleId: user.role_id,
-    roleName: user.role_name ?? (user.role === 'super_admin' ? 'Super admin' : 'Admin'),
-    permissions: parsePermissions(user.permissions_json),
+    roleName: role?.name ?? (user.role === 'super_admin' ? 'Super admin' : 'Admin'),
+    permissions: parsePermissions(role?.permissions_json ?? null),
   }
+}
+
+export async function findUserByEmail(
+  email: string,
+): Promise<UserWithPassword | null> {
+  return findUser({ email })
+}
+
+export async function findUserById(id: number): Promise<UserWithPassword | null> {
+  return findUser({ id })
 }
