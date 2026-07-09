@@ -2,6 +2,11 @@ import { getMailSetting } from '../mail/mail-settings.service.js'
 import { getMailProvider } from '../mail/providers/provider-registry.js'
 import { findCommunicationProviderById } from '../communication-providers/communication-providers.repository.js'
 import type { CommunicationProvider } from '../communication-providers/communication-providers.types.js'
+import {
+  buildWassengerMessageRequest,
+  extractWassengerMessageId,
+  isWassengerProvider,
+} from '../communication-providers/adapters/wassenger.provider.js'
 import { findTemplateById } from '../templates/templates.repository.js'
 import { renderTemplate } from '../templates/templates.renderer.js'
 import { createTechnicalLog } from '../technical-logs/technical-logs.repository.js'
@@ -521,7 +526,16 @@ async function sendCommunicationCampaignChannel(
   let failed = 0
   const errors: string[] = []
 
-  for (const recipient of recipients) {
+  if (
+    isWassengerProvider(provider) &&
+    recipients.length > provider.limits.batchSize
+  ) {
+    throw new Error(
+      `La campagne WhatsApp contient ${recipients.length} destinataire(s), au-dessus de la limite Wassenger configurée (${provider.limits.batchSize}).`,
+    )
+  }
+
+  for (const [index, recipient] of recipients.entries()) {
     const variables = getTemplateVariables(recipient.contact)
     const rendered = renderTemplate(
       {
@@ -557,6 +571,10 @@ async function sendCommunicationCampaignChannel(
       })
       failed += 1
     }
+
+    if (index < recipients.length - 1) {
+      await waitForProviderRateLimit(provider)
+    }
   }
 
   return {
@@ -574,24 +592,22 @@ async function sendCommunicationMessage(input: {
   recipient: CampaignChannelRecipient
   source: CampaignSendSource
 }) {
-  const payload = buildCommunicationPayload(input)
-  const endpoint = getCommunicationEndpoint(input.provider, input.recipient)
-  const headers = buildCommunicationHeaders(input.provider)
+  const request = buildCommunicationRequest(input)
 
   logCampaignPayload({
     campaign: input.campaign,
     channel: input.channel.channel,
     mode: 'single',
-    payload,
+    payload: request.payload,
     providerName: input.provider.name,
     recipientCount: 1,
     source: input.source,
   })
 
-  const response = await fetch(endpoint, {
-    body: JSON.stringify(payload),
-    headers,
-    method: getProviderVariable(input.provider, 'method') ?? 'POST',
+  const response = await fetch(request.endpoint, {
+    body: JSON.stringify(request.payload),
+    headers: request.headers,
+    method: request.method,
   })
   const text = await response.text()
   const data = parseProviderResponse(text)
@@ -612,8 +628,34 @@ async function sendCommunicationMessage(input: {
 
   return {
     providerMessageId:
-      extractProviderMessageId(data) ??
+      extractCommunicationProviderMessageId(input.provider, data) ??
       `${input.channel.channel}:${input.recipient.channelRecipientId}`,
+  }
+}
+
+function buildCommunicationRequest(input: {
+  message: string
+  provider: CommunicationProvider
+  recipient: CampaignChannelRecipient
+}) {
+  if (isWassengerProvider(input.provider)) {
+    return buildWassengerMessageRequest({
+      message: input.message,
+      phone: getRecipientValue(input.provider, input.recipient),
+      provider: input.provider,
+    })
+  }
+
+  return {
+    endpoint: getCommunicationEndpoint(input.provider, input.recipient),
+    headers: buildCommunicationHeaders(input.provider),
+    method: (getProviderVariable(input.provider, 'method') ?? 'POST') as
+      | 'DELETE'
+      | 'GET'
+      | 'PATCH'
+      | 'POST'
+      | 'PUT',
+    payload: buildCommunicationPayload(input),
   }
 }
 
@@ -910,6 +952,28 @@ function extractProviderMessageId(response: unknown): string | undefined {
       : undefined)
 
   return messageId ? String(messageId) : undefined
+}
+
+function extractCommunicationProviderMessageId(
+  provider: CommunicationProvider,
+  response: unknown,
+) {
+  if (isWassengerProvider(provider)) {
+    return extractWassengerMessageId(response) ?? extractProviderMessageId(response)
+  }
+
+  return extractProviderMessageId(response)
+}
+
+async function waitForProviderRateLimit(provider: CommunicationProvider) {
+  const maxPerMinute = Math.max(1, provider.limits.maxPerMinute)
+  const delayMs = Math.ceil(60000 / maxPerMinute)
+
+  if (delayMs <= 0) return
+
+  await new Promise((resolve) => {
+    setTimeout(resolve, delayMs)
+  })
 }
 
 function formatChannelLabel(channel: CampaignChannelConfig['channel']) {

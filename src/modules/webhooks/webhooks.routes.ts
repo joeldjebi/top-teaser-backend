@@ -11,6 +11,7 @@ const providerParamSchema = z.object({
     'amazon-ses',
     'twilio',
     'meta-whatsapp',
+    'wassenger',
     'telegram',
     'generic',
   ]),
@@ -37,7 +38,8 @@ webhooksRouter.post('/:provider', async (request, response) => {
     getString(payload.SmsSid) ??
     getString(payload.sid) ??
     getString(payload.sg_message_id) ??
-    getString(payload.id)
+    getString(payload.id) ??
+    getString(payload.message)
   const eventType =
     getString(payload.RecordType) ??
     getString(payload.event) ??
@@ -45,6 +47,7 @@ webhooksRouter.post('/:provider', async (request, response) => {
     getString(payload.MessageStatus) ??
     getString(payload.SmsStatus) ??
     getString(payload.status) ??
+    getString(payload.state) ??
     getString(payload.type) ??
     'unknown'
 
