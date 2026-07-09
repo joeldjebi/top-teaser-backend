@@ -71,6 +71,14 @@ export async function listActivityLogs(limit = 250) {
   return rows.map(mapActivityLog)
 }
 
+export async function clearActivityLogs() {
+  const [result] = await db.execute<ResultSetHeader>('DELETE FROM activity_logs')
+
+  return {
+    activityLogs: result.affectedRows,
+  }
+}
+
 export async function logActivity(input: {
   actor?: ActivityActor | null
   action: string

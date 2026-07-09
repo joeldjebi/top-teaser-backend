@@ -25,6 +25,7 @@ export type CampaignChannelConfig = {
   campaignId: number
   channel: CampaignChannel
   communicationProviderId: number | null
+  templateId: number | null
   sendMode: CampaignSendMode
   status: CampaignStatus
   errorMessage: string | null
@@ -80,6 +81,7 @@ export type CreateCampaignInput = {
   channels?: Array<{
     channel: CampaignChannel
     communicationProviderId?: number | null
+    templateId?: number | null
     sendMode?: CampaignSendMode
   }>
   scheduledAt?: string | null

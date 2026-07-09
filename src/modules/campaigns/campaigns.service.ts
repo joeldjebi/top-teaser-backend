@@ -77,6 +77,7 @@ export async function sendCampaign(
           campaignId: campaign.id,
           channel: campaign.channel,
           communicationProviderId: campaign.communicationProviderId,
+          templateId: campaign.templateId,
           sendMode: campaign.sendMode,
           status: campaign.status,
           errorMessage: campaign.errorMessage,
@@ -172,7 +173,9 @@ async function sendEmailCampaignChannel(
   }
 
   const emailSendMode = emailChannel.sendMode
-  const template = await findTemplateById(campaign.templateId)
+  const template = await findTemplateById(
+    emailChannel.templateId ?? campaign.templateId,
+  )
 
   if (!template) {
     throw new Error('Campaign template not found.')
@@ -505,7 +508,7 @@ async function sendCommunicationCampaignChannel(
 
   const [provider, template] = await Promise.all([
     findCommunicationProviderById(channel.communicationProviderId),
-    findTemplateById(campaign.templateId),
+    findTemplateById(channel.templateId ?? campaign.templateId),
   ])
 
   if (!provider || !provider.isActive || provider.channel !== channel.channel) {
@@ -643,6 +646,7 @@ function buildCommunicationRequest(input: {
       message: input.message,
       phone: getRecipientValue(input.provider, input.recipient),
       provider: input.provider,
+      variables: getTemplateVariables(input.recipient.contact),
     })
   }
 

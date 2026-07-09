@@ -8,6 +8,7 @@ import type {
 
 type EmailTemplateRow = RowDataPacket & {
   id: number
+  channel: EmailTemplate['channel']
   name: string
   subject: string
   html_content: string
@@ -19,6 +20,7 @@ type EmailTemplateRow = RowDataPacket & {
 function mapTemplate(row: EmailTemplateRow): EmailTemplate {
   return {
     id: row.id,
+    channel: row.channel ?? 'email',
     name: row.name,
     subject: row.subject,
     htmlContent: row.html_content,
@@ -30,9 +32,9 @@ function mapTemplate(row: EmailTemplateRow): EmailTemplate {
 
 export async function listTemplates(): Promise<EmailTemplate[]> {
   const [rows] = await db.execute<EmailTemplateRow[]>(
-    `SELECT id, name, subject, html_content, text_content, created_at, updated_at
+    `SELECT id, channel, name, subject, html_content, text_content, created_at, updated_at
      FROM email_templates
-     ORDER BY created_at DESC, id DESC`,
+     ORDER BY FIELD(channel, 'email', 'sms', 'whatsapp', 'telegram'), created_at DESC, id DESC`,
   )
 
   return rows.map(mapTemplate)
@@ -40,7 +42,7 @@ export async function listTemplates(): Promise<EmailTemplate[]> {
 
 export async function findTemplateById(id: number): Promise<EmailTemplate | null> {
   const [rows] = await db.execute<EmailTemplateRow[]>(
-    `SELECT id, name, subject, html_content, text_content, created_at, updated_at
+    `SELECT id, channel, name, subject, html_content, text_content, created_at, updated_at
      FROM email_templates
      WHERE id = ?
      LIMIT 1`,
@@ -56,9 +58,15 @@ export async function createTemplate(
   input: CreateEmailTemplateInput,
 ): Promise<EmailTemplate> {
   const [result] = await db.execute<ResultSetHeader>(
-    `INSERT INTO email_templates (name, subject, html_content, text_content)
-     VALUES (?, ?, ?, ?)`,
-    [input.name, input.subject, input.htmlContent, input.textContent ?? null],
+    `INSERT INTO email_templates (channel, name, subject, html_content, text_content)
+     VALUES (?, ?, ?, ?, ?)`,
+    [
+      input.channel ?? 'email',
+      input.name,
+      input.subject,
+      input.htmlContent,
+      input.textContent ?? null,
+    ],
   )
 
   const template = await findTemplateById(result.insertId)
@@ -80,6 +88,11 @@ export async function updateTemplate(
   if (input.name !== undefined) {
     fields.push('name = ?')
     values.push(input.name)
+  }
+
+  if (input.channel !== undefined) {
+    fields.push('channel = ?')
+    values.push(input.channel)
   }
 
   if (input.subject !== undefined) {

@@ -3,6 +3,7 @@ import { requireAuth } from '../auth/auth.middleware.js'
 import { findContactById } from '../contacts/contacts.repository.js'
 import {
   addContactToList,
+  clearContactLists,
   createContactList,
   deleteContactList,
   findContactListById,
@@ -43,6 +44,12 @@ contactListsRouter.post('/', async (request, response) => {
 
   response.status(201).json({
     data: contactList,
+  })
+})
+
+contactListsRouter.delete('/', async (_request, response) => {
+  response.json({
+    data: await clearContactLists(),
   })
 })
 

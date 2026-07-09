@@ -36,6 +36,7 @@ type CampaignChannelRow = RowDataPacket & {
   campaign_id: number
   channel: CampaignChannelConfig['channel']
   communication_provider_id: number | null
+  template_id: number | null
   send_mode: CampaignChannelConfig['sendMode']
   status: CampaignStatus
   error_message: string | null
@@ -128,6 +129,7 @@ function mapCampaignChannel(row: CampaignChannelRow): CampaignChannelConfig {
     campaignId: row.campaign_id,
     channel: row.channel,
     communicationProviderId: row.communication_provider_id,
+    templateId: row.template_id,
     sendMode: row.send_mode ?? 'single',
     status: row.status,
     errorMessage: row.error_message,
@@ -145,6 +147,7 @@ function getPrimaryChannelInput(input: CreateCampaignInput | UpdateCampaignInput
     channel: primaryChannel?.channel ?? input.channel ?? 'email',
     communicationProviderId:
       primaryChannel?.communicationProviderId ?? input.communicationProviderId ?? null,
+    templateId: primaryChannel?.templateId ?? input.templateId ?? null,
     sendMode: primaryChannel?.sendMode ?? input.sendMode ?? 'single',
   }
 }
@@ -163,6 +166,7 @@ async function hydrateCampaignChannels(campaign: Campaign): Promise<Campaign> {
               campaignId: campaign.id,
               channel: campaign.channel,
               communicationProviderId: campaign.communicationProviderId,
+              templateId: campaign.templateId,
               sendMode: campaign.sendMode,
               status: campaign.status,
               errorMessage: campaign.errorMessage,
@@ -177,7 +181,7 @@ export async function listCampaignChannels(
   campaignId: number,
 ): Promise<CampaignChannelConfig[]> {
   const [rows] = await db.execute<CampaignChannelRow[]>(
-    `SELECT id, campaign_id, channel, communication_provider_id, send_mode,
+    `SELECT id, campaign_id, channel, communication_provider_id, template_id, send_mode,
             status, error_message, created_at, updated_at
      FROM campaign_channels
      WHERE campaign_id = ?
@@ -201,12 +205,13 @@ async function replaceCampaignChannels(
   for (const channel of input.channels) {
     await db.execute(
       `INSERT INTO campaign_channels
-         (campaign_id, channel, communication_provider_id, send_mode, status)
-       VALUES (?, ?, ?, ?, 'ready')`,
+         (campaign_id, channel, communication_provider_id, template_id, send_mode, status)
+       VALUES (?, ?, ?, ?, ?, 'ready')`,
       [
         campaignId,
         channel.channel,
         channel.communicationProviderId ?? null,
+        channel.templateId ?? input.templateId ?? null,
         channel.sendMode ?? 'single',
       ],
     )
@@ -404,6 +409,14 @@ export async function deleteCampaign(id: number): Promise<boolean> {
   )
 
   return result.affectedRows > 0
+}
+
+export async function clearCampaigns(): Promise<{ campaigns: number }> {
+  const [result] = await db.execute<ResultSetHeader>('DELETE FROM campaigns')
+
+  return {
+    campaigns: result.affectedRows,
+  }
 }
 
 export async function prepareCampaignRecipients(

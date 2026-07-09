@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
 import { requireAuth, requirePermission } from '../auth/auth.middleware.js'
-import { listActivityLogs } from './activity-logs.repository.js'
+import { clearActivityLogs, listActivityLogs } from './activity-logs.repository.js'
 
 const querySchema = z.object({
   limit: z.coerce.number().int().positive().max(500).optional(),
@@ -22,5 +22,11 @@ activityLogsRouter.get('/', async (request, response) => {
 
   response.json({
     data: await listActivityLogs(parsed.data.limit),
+  })
+})
+
+activityLogsRouter.delete('/', requirePermission('logs', 'delete'), async (_request, response) => {
+  response.json({
+    data: await clearActivityLogs(),
   })
 })

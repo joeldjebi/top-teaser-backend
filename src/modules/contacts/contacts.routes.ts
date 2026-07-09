@@ -6,6 +6,7 @@ import {
   updateContactSchema,
 } from './contacts.schemas.js'
 import {
+  clearContacts,
   createContact,
   deleteContact,
   findContactById,
@@ -60,6 +61,12 @@ contactsRouter.post('/', async (request, response) => {
 
     throw error
   }
+})
+
+contactsRouter.delete('/', async (_request, response) => {
+  response.json({
+    data: await clearContacts(),
+  })
 })
 
 contactsRouter.get('/:id', async (request, response) => {

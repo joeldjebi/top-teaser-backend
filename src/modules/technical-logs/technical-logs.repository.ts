@@ -92,3 +92,11 @@ export async function listTechnicalLogs(limit = 300): Promise<TechnicalLog[]> {
 
   return rows.map(mapTechnicalLog)
 }
+
+export async function clearTechnicalLogs() {
+  const [result] = await db.execute<ResultSetHeader>('DELETE FROM technical_logs')
+
+  return {
+    technicalLogs: result.affectedRows,
+  }
+}

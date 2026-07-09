@@ -159,6 +159,38 @@ export async function deleteContactList(id: number): Promise<boolean> {
   return result.affectedRows > 0
 }
 
+export async function clearContactLists(): Promise<{
+  campaigns: number
+  contactLists: number
+}> {
+  const connection = await db.getConnection()
+
+  try {
+    await connection.beginTransaction()
+
+    const [campaignsResult] = await connection.execute<ResultSetHeader>(
+      `DELETE c
+       FROM campaigns c
+       INNER JOIN contact_lists cl ON cl.id = c.contact_list_id`,
+    )
+    const [contactListsResult] = await connection.execute<ResultSetHeader>(
+      'DELETE FROM contact_lists',
+    )
+
+    await connection.commit()
+
+    return {
+      campaigns: campaignsResult.affectedRows,
+      contactLists: contactListsResult.affectedRows,
+    }
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+}
+
 export async function addContactToList(
   contactListId: number,
   contactId: number,

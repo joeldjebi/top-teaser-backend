@@ -198,3 +198,39 @@ export async function deleteContact(id: number): Promise<boolean> {
 
   return result.affectedRows > 0
 }
+
+export async function clearContacts(): Promise<{
+  contacts: number
+  imports: number
+  recipients: number
+}> {
+  const connection = await db.getConnection()
+
+  try {
+    await connection.beginTransaction()
+
+    const [recipientsResult] = await connection.execute<ResultSetHeader>(
+      'DELETE FROM campaign_recipients',
+    )
+    await connection.execute('DELETE FROM contact_list_items')
+    const [importsResult] = await connection.execute<ResultSetHeader>(
+      'DELETE FROM contact_imports',
+    )
+    const [contactsResult] = await connection.execute<ResultSetHeader>(
+      'DELETE FROM contacts',
+    )
+
+    await connection.commit()
+
+    return {
+      contacts: contactsResult.affectedRows,
+      imports: importsResult.affectedRows,
+      recipients: recipientsResult.affectedRows,
+    }
+  } catch (error) {
+    await connection.rollback()
+    throw error
+  } finally {
+    connection.release()
+  }
+}

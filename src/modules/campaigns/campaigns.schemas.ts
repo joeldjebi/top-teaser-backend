@@ -15,6 +15,7 @@ export const campaignChannelSchema = z.enum(['email', 'sms', 'whatsapp', 'telegr
 export const campaignChannelConfigSchema = z.object({
   channel: campaignChannelSchema,
   communicationProviderId: z.number().int().positive().nullable().optional(),
+  templateId: z.number().int().positive().nullable().optional(),
   sendMode: campaignSendModeSchema.default('single'),
 })
 

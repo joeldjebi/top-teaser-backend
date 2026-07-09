@@ -141,12 +141,14 @@ CREATE TABLE contact_import_rows (
 
 CREATE TABLE email_templates (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  channel ENUM('email', 'sms', 'whatsapp', 'telegram') NOT NULL DEFAULT 'email',
   name VARCHAR(160) NOT NULL,
   subject VARCHAR(255) NOT NULL,
   html_content MEDIUMTEXT NOT NULL,
   text_content MEDIUMTEXT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  KEY idx_email_templates_channel_created (channel, created_at, id),
   KEY idx_email_templates_created_at (created_at, id)
 );
 
@@ -193,6 +195,7 @@ CREATE TABLE campaign_channels (
   campaign_id BIGINT UNSIGNED NOT NULL,
   channel ENUM('email', 'sms', 'whatsapp', 'telegram') NOT NULL,
   communication_provider_id BIGINT UNSIGNED NULL,
+  template_id BIGINT UNSIGNED NULL,
   send_mode ENUM('single', 'bulk') NOT NULL DEFAULT 'single',
   status ENUM('draft', 'ready', 'sending', 'sent', 'failed', 'cancelled') NOT NULL DEFAULT 'ready',
   error_message TEXT NULL,
@@ -203,7 +206,8 @@ CREATE TABLE campaign_channels (
   KEY idx_campaign_channels_provider (communication_provider_id),
   KEY idx_campaign_channels_channel (channel),
   CONSTRAINT fk_campaign_channels_campaign FOREIGN KEY (campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE,
-  CONSTRAINT fk_campaign_channels_provider FOREIGN KEY (communication_provider_id) REFERENCES communication_providers(id) ON DELETE SET NULL
+  CONSTRAINT fk_campaign_channels_provider FOREIGN KEY (communication_provider_id) REFERENCES communication_providers(id) ON DELETE SET NULL,
+  CONSTRAINT fk_campaign_channels_template FOREIGN KEY (template_id) REFERENCES email_templates(id) ON DELETE SET NULL
 );
 
 CREATE TABLE campaign_recipients (

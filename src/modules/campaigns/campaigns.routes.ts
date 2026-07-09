@@ -4,6 +4,7 @@ import { findCommunicationProviderById } from '../communication-providers/commun
 import { findContactListById } from '../contact-lists/contact-lists.repository.js'
 import { findTemplateById } from '../templates/templates.repository.js'
 import {
+  clearCampaigns,
   createCampaign,
   deleteCampaign,
   findCampaignById,
@@ -40,13 +41,14 @@ campaignsRouter.use(requireAuth)
 type ChannelConfigInput = {
   channel: CampaignChannel
   communicationProviderId?: number | null
+  templateId?: number | null
   sendMode?: CampaignSendMode
 }
 
 function normalizeChannelConfigs(
   input: Pick<
     CreateCampaignInput,
-    'channel' | 'communicationProviderId' | 'sendMode' | 'channels'
+    'channel' | 'communicationProviderId' | 'templateId' | 'sendMode' | 'channels'
   >,
 ): ChannelConfigInput[] {
   const channels =
@@ -56,6 +58,7 @@ function normalizeChannelConfigs(
           {
             channel: input.channel ?? 'email',
             communicationProviderId: input.communicationProviderId ?? null,
+            templateId: input.templateId,
             sendMode: input.sendMode ?? 'single',
           },
         ]
@@ -69,12 +72,26 @@ function normalizeChannelConfigs(
   })
 }
 
-async function validateChannelConfigs(channels: ChannelConfigInput[]) {
+async function validateChannelConfigs(
+  channels: ChannelConfigInput[],
+  fallbackTemplateId: number,
+) {
   if (channels.length === 0) {
     return 'Sélectionnez au moins un canal.'
   }
 
   for (const channel of channels) {
+    const templateId = channel.templateId ?? fallbackTemplateId
+    const template = await findTemplateById(templateId)
+
+    if (!template) {
+      return `Le template du canal ${channel.channel} est introuvable.`
+    }
+
+    if (template.channel !== channel.channel) {
+      return `Le template « ${template.name} » est de type ${template.channel}. Sélectionnez un template ${channel.channel}.`
+    }
+
     if (channel.channel === 'email') continue
 
     if (!channel.communicationProviderId) {
@@ -104,6 +121,7 @@ function getCampaignChannelFallback(campaign: Campaign): ChannelConfigInput[] {
         {
           channel: campaign.channel,
           communicationProviderId: campaign.communicationProviderId,
+          templateId: campaign.templateId,
           sendMode: campaign.sendMode,
         },
       ]
@@ -139,7 +157,10 @@ campaignsRouter.post('/', async (request, response) => {
   }
 
   const channels = normalizeChannelConfigs(parsed.data)
-  const channelValidationError = await validateChannelConfigs(channels)
+  const channelValidationError = await validateChannelConfigs(
+    channels,
+    parsed.data.templateId,
+  )
 
   if (channelValidationError) {
     response.status(422).json({
@@ -156,6 +177,12 @@ campaignsRouter.post('/', async (request, response) => {
 
   response.status(201).json({
     data: campaign,
+  })
+})
+
+campaignsRouter.delete('/', async (_request, response) => {
+  response.json({
+    data: await clearCampaigns(),
   })
 })
 
@@ -212,6 +239,7 @@ campaignsRouter.patch('/:id', async (request, response) => {
     body.data.channels !== undefined ||
     body.data.channel !== undefined ||
     body.data.communicationProviderId !== undefined ||
+    body.data.templateId !== undefined ||
     body.data.sendMode !== undefined
   const usesLegacyChannelPatch =
     body.data.channels === undefined && shouldValidateChannels
@@ -223,6 +251,7 @@ campaignsRouter.patch('/:id', async (request, response) => {
           communicationProviderId:
             body.data.communicationProviderId ??
             existingCampaign.communicationProviderId,
+          templateId: body.data.templateId ?? existingCampaign.templateId,
           sendMode: body.data.sendMode ?? existingCampaign.sendMode,
           channels: body.data.channels,
         })
@@ -231,6 +260,7 @@ campaignsRouter.patch('/:id', async (request, response) => {
           communicationProviderId:
             body.data.communicationProviderId ??
             existingCampaign.communicationProviderId,
+          templateId: body.data.templateId ?? existingCampaign.templateId,
           sendMode: body.data.sendMode ?? existingCampaign.sendMode,
           channels: usesLegacyChannelPatch
             ? undefined
@@ -239,7 +269,10 @@ campaignsRouter.patch('/:id', async (request, response) => {
     : undefined
 
   if (channels) {
-    const channelValidationError = await validateChannelConfigs(channels)
+    const channelValidationError = await validateChannelConfigs(
+      channels,
+      body.data.templateId ?? existingCampaign.templateId,
+    )
 
     if (channelValidationError) {
       response.status(422).json({

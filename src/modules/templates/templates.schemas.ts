@@ -4,7 +4,10 @@ export const templateIdParamSchema = z.object({
   id: z.coerce.number().int().positive(),
 })
 
+export const templateChannelSchema = z.enum(['email', 'sms', 'whatsapp', 'telegram'])
+
 export const createTemplateSchema = z.object({
+  channel: templateChannelSchema.default('email'),
   name: z.string().trim().min(1).max(160),
   subject: z.string().trim().min(1).max(255),
   htmlContent: z.string().trim().min(1),
