@@ -23,6 +23,7 @@
     "db:create-campaign-channel-recipients": "tsx src/scripts/20260708-create-campaign-channel-recipients.ts",
     "db:create-technical-logs": "tsx src/scripts/20260708-create-technical-logs.ts",
     "db:add-channel-templates": "tsx src/scripts/20260709-add-channel-templates.ts",
+    "db:add-admin-active-status": "tsx src/scripts/20260709-add-admin-active-status.ts",
     "create-super-admin": "tsx src/scripts/create-super-admin.ts",
     "reset-super-admin": "node dist/scripts/create-super-admin.js",
     "reset-super-admin:dev": "tsx src/scripts/create-super-admin.ts"

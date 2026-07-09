@@ -5,9 +5,11 @@ CREATE TABLE users (
   password_hash VARCHAR(255) NOT NULL,
   role ENUM('admin', 'super_admin') NOT NULL DEFAULT 'admin',
   role_id BIGINT UNSIGNED NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  KEY idx_users_role_id (role_id)
+  KEY idx_users_role_id (role_id),
+  KEY idx_users_active_role (is_active, role)
 );
 
 CREATE TABLE admin_roles (

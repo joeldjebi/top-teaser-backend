@@ -72,9 +72,11 @@ async function ensureUserSchema() {
         password_hash VARCHAR(255) NOT NULL,
         role ENUM('admin', 'super_admin') NOT NULL DEFAULT 'admin',
         role_id BIGINT UNSIGNED NULL,
+        is_active TINYINT(1) NOT NULL DEFAULT 1,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        KEY idx_users_role_id (role_id)
+        KEY idx_users_role_id (role_id),
+        KEY idx_users_active_role (is_active, role)
       )
     `)
 
@@ -84,6 +86,11 @@ async function ensureUserSchema() {
   if (!(await columnExists('users', 'role_id'))) {
     await db.execute('ALTER TABLE users ADD COLUMN role_id BIGINT UNSIGNED NULL AFTER role')
     await db.execute('ALTER TABLE users ADD INDEX idx_users_role_id (role_id)')
+  }
+
+  if (!(await columnExists('users', 'is_active'))) {
+    await db.execute('ALTER TABLE users ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1 AFTER role_id')
+    await db.execute('ALTER TABLE users ADD INDEX idx_users_active_role (is_active, role)')
   }
 
   await db.execute(
@@ -203,10 +210,10 @@ async function createSuperAdmin() {
   )
 
   if (users[0]) {
-    await db.execute(
-      `UPDATE users
-       SET name = ?, password_hash = ?, role = 'super_admin', role_id = ?
-       WHERE id = ?`,
+  await db.execute(
+    `UPDATE users
+     SET name = ?, password_hash = ?, role = 'super_admin', role_id = ?, is_active = 1
+     WHERE id = ?`,
       [name, passwordHash, roleId, users[0].id],
     )
 

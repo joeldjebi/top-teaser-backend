@@ -17,6 +17,7 @@ import {
   deleteAdminUser,
   findAdminRoleById,
   findAdminUserById,
+  isPrimarySuperAdmin,
   listAdminRoles,
   listAdminUsers,
   updateAdminPassword,
@@ -132,7 +133,7 @@ adminUsersRouter.delete(
 )
 
 adminUsersRouter.get('/', async (_request, response) => {
-  response.json({ data: await listAdminUsers() })
+  response.json({ data: await listAdminUsers(response.locals.user.id) })
 })
 
 adminUsersRouter.post(
@@ -226,6 +227,40 @@ adminUsersRouter.patch(
       return
     }
 
+    const actorIsPrimarySuperAdmin = await isPrimarySuperAdmin(response.locals.user.id)
+    const currentAdmin = await findAdminUserById(params.data.id)
+
+    if (!currentAdmin) {
+      response.status(404).json({ message: 'Admin not found.' })
+      return
+    }
+
+    if (!actorIsPrimarySuperAdmin) {
+      if (currentAdmin?.isProtected) {
+        response.status(404).json({ message: 'Admin not found.' })
+        return
+      }
+
+      response.status(403).json({
+        message: 'Seul le premier super admin peut modifier les admins.',
+      })
+      return
+    }
+
+    if (currentAdmin?.isProtected && params.data.id !== response.locals.user.id) {
+      response.status(409).json({
+        message: 'Le premier super admin est protégé.',
+      })
+      return
+    }
+
+    if (params.data.id === response.locals.user.id && body.data.isActive === false) {
+      response.status(409).json({
+        message: 'Vous ne pouvez pas désactiver votre propre compte.',
+      })
+      return
+    }
+
     const admin = await updateAdminUser(params.data.id, body.data)
 
     if (!admin) {
@@ -255,6 +290,33 @@ adminUsersRouter.patch(
 
     if (!params.success || !body.success) {
       response.status(422).json({ message: 'Invalid password payload.' })
+      return
+    }
+
+    const actorIsPrimarySuperAdmin = await isPrimarySuperAdmin(response.locals.user.id)
+    const admin = await findAdminUserById(params.data.id)
+
+    if (!admin) {
+      response.status(404).json({ message: 'Admin not found.' })
+      return
+    }
+
+    if (!actorIsPrimarySuperAdmin) {
+      if (admin.isProtected) {
+        response.status(404).json({ message: 'Admin not found.' })
+        return
+      }
+
+      response.status(403).json({
+        message: 'Seul le premier super admin peut modifier les admins.',
+      })
+      return
+    }
+
+    if (admin.isProtected && params.data.id !== response.locals.user.id) {
+      response.status(409).json({
+        message: 'Le premier super admin est protégé.',
+      })
       return
     }
 
@@ -290,6 +352,27 @@ adminUsersRouter.delete(
 
     if (!admin) {
       response.status(404).json({ message: 'Admin not found.' })
+      return
+    }
+
+    const actorIsPrimarySuperAdmin = await isPrimarySuperAdmin(response.locals.user.id)
+
+    if (!actorIsPrimarySuperAdmin) {
+      if (admin.isProtected) {
+        response.status(404).json({ message: 'Admin not found.' })
+        return
+      }
+
+      response.status(403).json({
+        message: 'Seul le premier super admin peut supprimer les admins.',
+      })
+      return
+    }
+
+    if (admin.isProtected) {
+      response.status(409).json({
+        message: 'Le premier super admin est protégé.',
+      })
       return
     }
 

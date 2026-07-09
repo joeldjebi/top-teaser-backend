@@ -24,6 +24,7 @@ export type AuthenticatedUser = {
   role: 'admin' | 'super_admin'
   roleId: number | null
   roleName: string
+  isActive: boolean
   permissions: PermissionMatrix
 }
 

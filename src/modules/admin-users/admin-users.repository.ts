@@ -18,6 +18,8 @@ type AdminUserRow = RowDataPacket & {
   email: string
   role: 'admin' | 'super_admin'
   role_id: number | null
+  is_active: 0 | 1
+  is_protected: 0 | 1
   role_name: string | null
   permissions_json: string | PermissionMatrix | null
   created_at: Date
@@ -40,6 +42,8 @@ export type AdminUser = {
   role: 'admin' | 'super_admin'
   roleId: number | null
   roleName: string
+  isActive: boolean
+  isProtected: boolean
   permissions: PermissionMatrix | null
   createdAt: string
   updatedAt: string
@@ -76,6 +80,8 @@ function mapUser(row: AdminUserRow): AdminUser {
     role: row.role,
     roleId: row.role_id,
     roleName: row.role_name ?? (row.role === 'super_admin' ? 'Super admin' : 'Admin'),
+    isActive: Boolean(row.is_active),
+    isProtected: Boolean(row.is_protected),
     permissions: parsePermissions(row.permissions_json),
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
@@ -159,13 +165,42 @@ export async function deleteAdminRole(id: number) {
   return result.affectedRows > 0
 }
 
-export async function listAdminUsers() {
+export async function getPrimarySuperAdminId() {
+  const [rows] = await db.execute<Array<RowDataPacket & { id: number }>>(
+    `SELECT id
+     FROM users
+     WHERE role = 'super_admin'
+     ORDER BY id ASC
+     LIMIT 1`,
+  )
+
+  return rows[0]?.id ?? null
+}
+
+export async function isPrimarySuperAdmin(userId: number) {
+  const primarySuperAdminId = await getPrimarySuperAdminId()
+
+  return primarySuperAdminId === userId
+}
+
+export async function listAdminUsers(viewerId: number) {
+  const primarySuperAdminId = await getPrimarySuperAdminId()
+  const hidePrimarySuperAdmin = primarySuperAdminId !== null && primarySuperAdminId !== viewerId
   const [rows] = await db.execute<AdminUserRow[]>(
-    `SELECT u.id, u.name, u.email, u.role, u.role_id, u.created_at, u.updated_at,
+    `SELECT u.id, u.name, u.email, u.role, u.role_id,
+            COALESCE(u.is_active, 1) AS is_active,
+            CASE WHEN u.id = ? THEN 1 ELSE 0 END AS is_protected,
+            u.created_at, u.updated_at,
             ar.name AS role_name, ar.permissions_json
      FROM users u
      LEFT JOIN admin_roles ar ON ar.id = u.role_id
+     WHERE (? = 0 OR u.id <> ?)
      ORDER BY u.created_at DESC, u.id DESC`,
+    [
+      primarySuperAdminId ?? 0,
+      hidePrimarySuperAdmin ? 1 : 0,
+      primarySuperAdminId ?? 0,
+    ],
   )
 
   return rows.map(mapUser)
@@ -173,7 +208,12 @@ export async function listAdminUsers() {
 
 export async function findAdminUserById(id: number) {
   const [rows] = await db.execute<AdminUserRow[]>(
-    `SELECT u.id, u.name, u.email, u.role, u.role_id, u.created_at, u.updated_at,
+    `SELECT u.id, u.name, u.email, u.role, u.role_id,
+            COALESCE(u.is_active, 1) AS is_active,
+            CASE WHEN u.id = (
+              SELECT su.id FROM users su WHERE su.role = 'super_admin' ORDER BY su.id ASC LIMIT 1
+            ) THEN 1 ELSE 0 END AS is_protected,
+            u.created_at, u.updated_at,
             ar.name AS role_name, ar.permissions_json
      FROM users u
      LEFT JOIN admin_roles ar ON ar.id = u.role_id
@@ -244,13 +284,14 @@ export async function createInitialSuperAdmin(input: {
   const roleId = await findOrCreateSuperAdminRole(input.permissions)
   const passwordHash = await bcrypt.hash(input.password, 12)
   const [result] = await db.execute<ResultSetHeader>(
-    `INSERT INTO users (name, email, password_hash, role, role_id)
-     VALUES (?, ?, ?, 'super_admin', ?)
+    `INSERT INTO users (name, email, password_hash, role, role_id, is_active)
+     VALUES (?, ?, ?, 'super_admin', ?, 1)
      ON DUPLICATE KEY UPDATE
        name = VALUES(name),
        password_hash = VALUES(password_hash),
        role = 'super_admin',
-       role_id = VALUES(role_id)`,
+       role_id = VALUES(role_id),
+       is_active = 1`,
     [input.name, input.email, passwordHash, roleId],
   )
 
@@ -274,8 +315,8 @@ export async function createAdminUser(input: {
 }) {
   const passwordHash = await bcrypt.hash(input.password, 12)
   const [result] = await db.execute<ResultSetHeader>(
-    `INSERT INTO users (name, email, password_hash, role, role_id)
-     VALUES (?, ?, ?, 'admin', ?)`,
+    `INSERT INTO users (name, email, password_hash, role, role_id, is_active)
+     VALUES (?, ?, ?, 'admin', ?, 1)`,
     [input.name, input.email, passwordHash, input.roleId],
   )
 
@@ -284,7 +325,7 @@ export async function createAdminUser(input: {
 
 export async function updateAdminUser(
   id: number,
-  input: Partial<{ name: string; email: string; roleId: number }>,
+  input: Partial<{ name: string; email: string; roleId: number; isActive: boolean }>,
 ) {
   const fields: string[] = []
   const values: Array<string | number> = []
@@ -302,6 +343,11 @@ export async function updateAdminUser(
   if (input.roleId !== undefined) {
     fields.push('role_id = ?')
     values.push(input.roleId)
+  }
+
+  if (input.isActive !== undefined) {
+    fields.push('is_active = ?')
+    values.push(input.isActive ? 1 : 0)
   }
 
   if (fields.length > 0) {

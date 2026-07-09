@@ -9,6 +9,7 @@ type UserRow = RowDataPacket & {
   password_hash: string
   role: 'admin' | 'super_admin'
   role_id: number | null
+  is_active: 0 | 1
 }
 
 type RoleRow = RowDataPacket & {
@@ -63,7 +64,8 @@ async function findUser(where: UserLookup): Promise<UserWithPassword | null> {
   }
 
   const [rows] = await db.execute<UserRow[]>(
-    `SELECT id, name, email, password_hash, role, role_id
+    `SELECT id, name, email, password_hash, role, role_id,
+            COALESCE(is_active, 1) AS is_active
      FROM users
      WHERE ${isEmailLookup ? 'email' : 'id'} = ?
      LIMIT 1`,
@@ -86,6 +88,7 @@ async function findUser(where: UserLookup): Promise<UserWithPassword | null> {
     role: user.role,
     roleId: user.role_id,
     roleName: role?.name ?? (user.role === 'super_admin' ? 'Super admin' : 'Admin'),
+    isActive: Boolean(user.is_active),
     permissions: parsePermissions(role?.permissions_json ?? null),
   }
 }

@@ -40,6 +40,7 @@ export const updateAdminSchema = z.object({
   name: z.string().trim().min(1).max(160).optional(),
   email: z.string().trim().email().max(190).optional(),
   roleId: z.number().int().positive().optional(),
+  isActive: z.boolean().optional(),
 })
 
 export const updatePasswordSchema = z.object({

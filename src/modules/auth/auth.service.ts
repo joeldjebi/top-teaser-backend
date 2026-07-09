@@ -29,6 +29,7 @@ function sanitizeUser(user: UserWithPassword): AuthenticatedUser {
     role: user.role,
     roleId: user.roleId,
     roleName: user.roleName,
+    isActive: user.isActive,
     permissions: user.permissions ?? fullPermissions,
   }
 }
@@ -36,7 +37,7 @@ function sanitizeUser(user: UserWithPassword): AuthenticatedUser {
 export async function loginAdmin(email: string, password: string) {
   const user = await findUserByEmail(email)
 
-  if (!user) {
+  if (!user || !user.isActive) {
     return null
   }
 
@@ -68,7 +69,7 @@ export async function getUserFromToken(token: string) {
   const payload = jwt.verify(token, env.auth.jwtSecret) as AuthTokenPayload
   const user = await findUserById(Number(payload.sub))
 
-  if (!user) {
+  if (!user || !user.isActive) {
     return null
   }
 
