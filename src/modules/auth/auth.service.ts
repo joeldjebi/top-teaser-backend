@@ -18,6 +18,7 @@ export const fullPermissions: PermissionMatrix = {
   campaigns: { create: true, read: true, update: true, delete: true },
   logs: { create: true, read: true, update: true, delete: true },
   providers: { create: true, read: true, update: true, delete: true },
+  landing: { create: true, read: true, update: true, delete: true },
   admins: { create: true, read: true, update: true, delete: true },
 }
 

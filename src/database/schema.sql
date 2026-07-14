@@ -299,3 +299,117 @@ CREATE TABLE suppression_list (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   KEY idx_suppression_list_reason_created (reason, created_at)
 );
+
+CREATE TABLE landing_pages (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  slug VARCHAR(80) NOT NULL,
+  title VARCHAR(160) NOT NULL,
+  seo_title VARCHAR(190) NULL,
+  seo_description VARCHAR(320) NULL,
+  brand_name VARCHAR(120) NOT NULL DEFAULT 'TOP TEASER',
+  slogan VARCHAR(190) NULL,
+  baseline VARCHAR(320) NULL,
+  is_published TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_landing_pages_slug (slug),
+  KEY idx_landing_pages_published (is_published)
+);
+
+CREATE TABLE landing_sections (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  page_id BIGINT UNSIGNED NOT NULL,
+  section_key VARCHAR(80) NOT NULL,
+  eyebrow VARCHAR(160) NULL,
+  title VARCHAR(190) NOT NULL,
+  subtitle VARCHAR(500) NULL,
+  body TEXT NULL,
+  cta_label VARCHAR(120) NULL,
+  cta_href VARCHAR(255) NULL,
+  secondary_cta_label VARCHAR(120) NULL,
+  secondary_cta_href VARCHAR(255) NULL,
+  metadata_json JSON NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_landing_sections_page_key (page_id, section_key),
+  KEY idx_landing_sections_order (page_id, is_enabled, sort_order),
+  CONSTRAINT fk_landing_sections_page FOREIGN KEY (page_id) REFERENCES landing_pages(id) ON DELETE CASCADE
+);
+
+CREATE TABLE landing_section_items (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  section_id BIGINT UNSIGNED NOT NULL,
+  item_key VARCHAR(80) NULL,
+  title VARCHAR(190) NOT NULL,
+  subtitle VARCHAR(255) NULL,
+  description TEXT NULL,
+  icon VARCHAR(80) NULL,
+  badge VARCHAR(80) NULL,
+  item_value VARCHAR(255) NULL,
+  href VARCHAR(255) NULL,
+  metadata_json JSON NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  is_highlighted TINYINT(1) NOT NULL DEFAULT 0,
+  is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_landing_items_section_key (section_id, item_key),
+  KEY idx_landing_items_order (section_id, is_enabled, sort_order),
+  CONSTRAINT fk_landing_items_section FOREIGN KEY (section_id) REFERENCES landing_sections(id) ON DELETE CASCADE
+);
+
+CREATE TABLE landing_channels (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  page_id BIGINT UNSIGNED NOT NULL,
+  family_key VARCHAR(80) NOT NULL,
+  family_label VARCHAR(120) NOT NULL,
+  channel_name VARCHAR(160) NOT NULL,
+  description VARCHAR(600) NOT NULL,
+  advantage VARCHAR(600) NOT NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_landing_channels_page_family_name (page_id, family_key, channel_name),
+  KEY idx_landing_channels_family_order (page_id, family_key, is_enabled, sort_order),
+  CONSTRAINT fk_landing_channels_page FOREIGN KEY (page_id) REFERENCES landing_pages(id) ON DELETE CASCADE
+);
+
+CREATE TABLE landing_pricing_packages (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  page_id BIGINT UNSIGNED NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  price VARCHAR(80) NOT NULL,
+  price_suffix VARCHAR(80) NULL,
+  badge VARCHAR(80) NULL,
+  description VARCHAR(500) NULL,
+  features_json JSON NULL,
+  cta_label VARCHAR(120) NULL,
+  cta_href VARCHAR(255) NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  is_popular TINYINT(1) NOT NULL DEFAULT 0,
+  is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_landing_pricing_page_name (page_id, name),
+  KEY idx_landing_pricing_order (page_id, is_enabled, sort_order),
+  CONSTRAINT fk_landing_pricing_page FOREIGN KEY (page_id) REFERENCES landing_pages(id) ON DELETE CASCADE
+);
+
+CREATE TABLE landing_contact_settings (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  page_id BIGINT UNSIGNED NOT NULL,
+  phone VARCHAR(80) NULL,
+  whatsapp VARCHAR(80) NULL,
+  email VARCHAR(190) NULL,
+  address VARCHAR(255) NULL,
+  opening_hours VARCHAR(160) NULL,
+  form_recipient VARCHAR(190) NULL,
+  metadata_json JSON NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_landing_contact_page (page_id),
+  CONSTRAINT fk_landing_contact_page FOREIGN KEY (page_id) REFERENCES landing_pages(id) ON DELETE CASCADE
+);

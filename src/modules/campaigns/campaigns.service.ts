@@ -1096,6 +1096,7 @@ function getTemplateVariables(contact: {
     ''
   const unsubscribeToken = createUnsubscribeToken(contact.email)
   const unsubscribeUrl = `${env.appUrl.replace(/\/$/, '')}/unsubscribe/${unsubscribeToken}`
+  const offerUrl = `${env.appUrl.replace(/\/$/, '')}/offre`
 
   return {
     email: contact.email,
@@ -1112,5 +1113,8 @@ function getTemplateVariables(contact: {
     numeroMobile: contact.mobileNumber ?? '',
     telephone: contact.mobileNumber ?? '',
     pays: contact.country ?? '',
+    buttonUrl: offerUrl,
+    offerUrl,
+    url: offerUrl,
   }
 }

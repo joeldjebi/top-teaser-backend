@@ -15,6 +15,7 @@ export const permissionMatrixSchema = z.object({
   campaigns: crudSchema,
   logs: crudSchema,
   providers: crudSchema,
+  landing: crudSchema,
   admins: crudSchema,
 })
 

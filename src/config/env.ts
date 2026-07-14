@@ -28,6 +28,9 @@ const envSchema = z.object({
   AWS_SES_REGION: z.string().optional(),
   AWS_SES_ACCESS_KEY_ID: z.string().optional(),
   AWS_SES_SECRET_ACCESS_KEY: z.string().optional(),
+  WASSENGER_API_TOKEN: z.string().optional(),
+  WASSENGER_DEFAULT_COUNTRY_CODE: z.string().default('225'),
+  WASSENGER_WEBHOOK_SECRET: z.string().optional(),
   MAIL_FROM: z.string().email().default('no-reply@top-teaser.com'),
 })
 
@@ -66,5 +69,10 @@ export const env = {
     amazonSesAccessKeyId: parsed.AWS_SES_ACCESS_KEY_ID,
     amazonSesSecretAccessKey: parsed.AWS_SES_SECRET_ACCESS_KEY,
     from: parsed.MAIL_FROM,
+  },
+  wassenger: {
+    apiToken: parsed.WASSENGER_API_TOKEN,
+    defaultCountryCode: parsed.WASSENGER_DEFAULT_COUNTRY_CODE,
+    webhookSecret: parsed.WASSENGER_WEBHOOK_SECRET,
   },
 }

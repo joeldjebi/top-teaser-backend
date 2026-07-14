@@ -1662,10 +1662,108 @@ export const openApiSpec: OpenAPIV3.Document = {
         },
       },
     },
+    '/api/webhooks/wassenger/register': {
+      post: {
+        tags: ['Webhooks'],
+        summary: 'Enregistrer le webhook Wassenger',
+        description:
+          'Cree un webhook Wassenger pointant vers /api/webhooks/wassenger. Necessite WASSENGER_API_TOKEN dans le fichier .env.',
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: false,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  name: {
+                    type: 'string',
+                    example: 'Top Teaser',
+                    maxLength: 30,
+                  },
+                  device: {
+                    type: 'string',
+                    example: '6a4f645ce502e209c97439df',
+                    pattern: '^[0-9A-Fa-f]{24}$',
+                  },
+                  url: {
+                    type: 'string',
+                    format: 'uri',
+                    example:
+                      'https://top-teaser.com/api/webhooks/wassenger?token=secret',
+                  },
+                  events: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    example: [
+                      'message:out:new',
+                      'message:out:sent',
+                      'message:out:ack',
+                      'message:out:failed',
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '201': {
+            description: 'Webhook Wassenger cree',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    data: {
+                      type: 'object',
+                      properties: {
+                        request: {
+                          type: 'object',
+                          additionalProperties: true,
+                        },
+                        response: {
+                          type: 'object',
+                          additionalProperties: true,
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          '401': {
+            description: 'Non authentifie',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' },
+              },
+            },
+          },
+          '422': {
+            description: 'Payload invalide',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ValidationErrorResponse' },
+              },
+            },
+          },
+          '502': {
+            description: 'Erreur Wassenger',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/ErrorResponse' },
+              },
+            },
+          },
+        },
+      },
+    },
     '/api/webhooks/{provider}': {
       post: {
         tags: ['Webhooks'],
-        summary: 'Recevoir un evenement provider email',
+        summary: 'Recevoir un evenement provider',
         parameters: [{ $ref: '#/components/parameters/WebhookProvider' }],
         requestBody: {
           required: true,

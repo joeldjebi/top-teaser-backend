@@ -1,4 +1,5 @@
 import type { CommunicationProvider } from '../communication-providers.types.js'
+import { env } from '../../../config/env.js'
 
 const DEFAULT_BASE_URL = 'https://api.wassenger.com/v1'
 const WASSENGER_DEVICE_ID_PATTERN = /^[0-9A-Fa-f]{24}$/
@@ -15,6 +16,12 @@ export type WassengerMessageRequest = {
       name: string
       language?: string
       body?: Array<{
+        name: string
+        value: string
+      }>
+      button?: Array<{
+        type: 'url'
+        position: number
         name: string
         value: string
       }>
@@ -41,7 +48,8 @@ export function buildWassengerMessageRequest(input: {
   const apiToken =
     getProviderVariable(input.provider, 'api_token') ??
     getProviderVariable(input.provider, 'api_key') ??
-    getProviderVariable(input.provider, 'bearer_token')
+    getProviderVariable(input.provider, 'bearer_token') ??
+    env.wassenger.apiToken
   const deviceId =
     getProviderVariable(input.provider, 'device_id') ??
     getProviderVariable(input.provider, 'device')
@@ -75,14 +83,18 @@ export function buildWassengerMessageRequest(input: {
     getProviderVariable(input.provider, 'template_language')
   const payload: WassengerMessageRequest['payload'] = {
     device: deviceId,
-    phone: normalizeWassengerPhone(input.phone),
+    phone: normalizeWassengerPhone(input.phone, input.provider),
   }
 
   if (templateName) {
     payload.template = {
       name: templateName,
       ...(templateLanguage ? { language: templateLanguage } : {}),
-      ...buildWassengerTemplateBody(input.provider, input.variables ?? {}),
+      ...buildWassengerTemplateVariables({
+        provider: input.provider,
+        templateName,
+        variables: input.variables ?? {},
+      }),
     }
   } else {
     payload.message = message
@@ -95,7 +107,7 @@ export function buildWassengerMessageRequest(input: {
   return {
     endpoint: getWassengerMessagesEndpoint(input.provider),
     headers: {
-      Authorization: apiToken,
+      Token: apiToken,
       'Content-Type': 'application/json',
     },
     method: 'POST',
@@ -103,15 +115,30 @@ export function buildWassengerMessageRequest(input: {
   }
 }
 
-function buildWassengerTemplateBody(
+function buildWassengerTemplateVariables(input: {
   provider: CommunicationProvider,
+  templateName: string,
   variables: Record<string, string | number | boolean | null>,
-) {
+}) {
+  return {
+    ...buildWassengerTemplateBody(input),
+    ...buildWassengerTemplateButtons(input),
+  }
+}
+
+function buildWassengerTemplateBody(input: {
+  provider: CommunicationProvider,
+  templateName: string,
+  variables: Record<string, string | number | boolean | null>,
+}) {
   const mapping =
-    getProviderVariable(provider, 'waba_template_body_variables') ??
-    getProviderVariable(provider, 'template_body_variables')
+    getProviderVariable(input.provider, 'waba_template_body_variables') ??
+    getProviderVariable(input.provider, 'template_body_variables')
 
   if (!mapping) return {}
+  if (isTopTeaserMetaTemplate(input.templateName) && isLegacyBodyMapping(mapping)) {
+    return {}
+  }
 
   const body = mapping
     .split(/[\n,;]/)
@@ -125,7 +152,7 @@ function buildWassengerTemplateBody(
           : [item, item]
       const name = rawName.trim()
       const variableKey = rawVariableKey.trim()
-      const value = variables[variableKey]
+      const value = input.variables[variableKey]
 
       return {
         name,
@@ -135,6 +162,66 @@ function buildWassengerTemplateBody(
     .filter((item) => /^[a-zA-Z0-9_]{1,32}$/.test(item.name))
 
   return body.length > 0 ? { body } : {}
+}
+
+function buildWassengerTemplateButtons(input: {
+  provider: CommunicationProvider,
+  templateName: string,
+  variables: Record<string, string | number | boolean | null>,
+}) {
+  const mapping =
+    getProviderVariable(input.provider, 'waba_template_button_variables') ??
+    getProviderVariable(input.provider, 'template_button_variables') ??
+    (isTopTeaserMetaTemplate(input.templateName) ? '1=offerUrl' : undefined)
+
+  if (!mapping) return {}
+
+  const button = mapping
+    .split(/[\n,;]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      const [rawDescriptor, rawVariableKey] = item.includes('=')
+        ? item.split('=')
+        : [item, item]
+      const descriptor = parseButtonVariableDescriptor(rawDescriptor)
+      const variableKey = rawVariableKey.trim()
+      const value = input.variables[variableKey]
+
+      return {
+        type: 'url' as const,
+        position: descriptor.position,
+        name: descriptor.name,
+        value: value === null || value === undefined ? '' : String(value),
+      }
+    })
+    .filter(
+      (item) =>
+        item.position >= 0 &&
+        item.position <= 9 &&
+        /^[a-zA-Z0-9_]{1,32}$/.test(item.name),
+    )
+
+  return button.length > 0 ? { button } : {}
+}
+
+function parseButtonVariableDescriptor(rawDescriptor: string) {
+  const descriptor = rawDescriptor.trim()
+  const [rawPosition, rawName] = descriptor.includes(':')
+    ? descriptor.split(':')
+    : ['', descriptor]
+  const position = rawPosition && /^\d+$/.test(rawPosition) ? Number(rawPosition) : 0
+  const name = (rawName || descriptor).trim()
+
+  return { position, name }
+}
+
+function isTopTeaserMetaTemplate(templateName: string) {
+  return templateName.trim().toLowerCase() === 'top_teaser_campagne'
+}
+
+function isLegacyBodyMapping(mapping: string) {
+  return mapping.replace(/\s+/g, '').toLowerCase() === 'fullname,commune,country'
 }
 
 export function extractWassengerMessageId(response: unknown) {
@@ -170,13 +257,34 @@ function getWassengerMessagesEndpoint(provider: CommunicationProvider) {
   return `${baseUrl.replace(/\/+$/, '').replace(/\/messages$/, '')}/messages`
 }
 
-function normalizeWassengerPhone(phone: string | null | undefined) {
-  const digits = String(phone ?? '').replace(/\D/g, '')
+function normalizeWassengerPhone(
+  phone: string | null | undefined,
+  provider: CommunicationProvider,
+) {
+  const rawPhone = String(phone ?? '').trim()
+  const digits = rawPhone.replace(/\D/g, '')
 
   if (digits.length < 8) {
     throw new Error(
       'Numéro WhatsApp invalide. Wassenger exige un numéro au format E.164, exemple +2250700000000.',
     )
+  }
+
+  if (rawPhone.startsWith('+')) {
+    return `+${digits}`
+  }
+
+  if (digits.startsWith('00')) {
+    return `+${digits.slice(2)}`
+  }
+
+  const defaultCountryCode =
+    getProviderVariable(provider, 'default_country_code') ??
+    getProviderVariable(provider, 'country_code') ??
+    env.wassenger.defaultCountryCode
+
+  if (defaultCountryCode && digits.startsWith('0')) {
+    return `+${defaultCountryCode.replace(/\D/g, '')}${digits}`
   }
 
   return `+${digits}`

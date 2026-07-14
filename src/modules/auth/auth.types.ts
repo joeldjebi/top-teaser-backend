@@ -13,6 +13,7 @@ export type PermissionResource =
   | 'campaigns'
   | 'logs'
   | 'providers'
+  | 'landing'
   | 'admins'
 
 export type PermissionMatrix = Record<PermissionResource, CrudPermission>

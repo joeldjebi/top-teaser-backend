@@ -8,6 +8,7 @@ import { contactsRouter } from '../modules/contacts/contacts.routes.js'
 import { communicationProvidersRouter } from '../modules/communication-providers/communication-providers.routes.js'
 import { emailLogsRouter } from '../modules/email-logs/email-logs.routes.js'
 import { importsRouter } from '../modules/imports/imports.routes.js'
+import { landingRouter } from '../modules/landing/landing.routes.js'
 import { locationsRouter } from '../modules/locations/locations.routes.js'
 import { mailRouter } from '../modules/mail/mail.routes.js'
 import { monitoringRouter } from '../modules/monitoring/monitoring.routes.js'
@@ -27,6 +28,7 @@ apiRouter.use('/admin-users', adminUsersRouter)
 apiRouter.use('/contacts', contactsRouter)
 apiRouter.use('/contact-lists', contactListsRouter)
 apiRouter.use('/imports', importsRouter)
+apiRouter.use('/landing', landingRouter)
 apiRouter.use('/locations', locationsRouter)
 apiRouter.use('/templates', templatesRouter)
 apiRouter.use('/campaigns', campaignsRouter)
