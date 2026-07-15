@@ -22,6 +22,22 @@ export const fullPermissions: PermissionMatrix = {
   admins: { create: true, read: true, update: true, delete: true },
 }
 
+function normalizePermissions(
+  permissions: PermissionMatrix | null,
+  fallback: PermissionMatrix,
+) {
+  const normalized = {} as PermissionMatrix
+
+  for (const resource of Object.keys(fallback) as Array<keyof PermissionMatrix>) {
+    normalized[resource] = {
+      ...fallback[resource],
+      ...(permissions?.[resource] ?? {}),
+    }
+  }
+
+  return normalized
+}
+
 function sanitizeUser(user: UserWithPassword): AuthenticatedUser {
   return {
     id: user.id,
@@ -31,7 +47,7 @@ function sanitizeUser(user: UserWithPassword): AuthenticatedUser {
     roleId: user.roleId,
     roleName: user.roleName,
     isActive: user.isActive,
-    permissions: user.permissions ?? fullPermissions,
+    permissions: normalizePermissions(user.permissions, fullPermissions),
   }
 }
 
