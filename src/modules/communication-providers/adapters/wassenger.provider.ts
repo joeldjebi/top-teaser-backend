@@ -43,6 +43,7 @@ export function buildWassengerMessageRequest(input: {
   message: string
   phone: string | null | undefined
   provider: CommunicationProvider
+  templateName?: string | null
   variables?: Record<string, string | number | boolean | null>
 }): WassengerMessageRequest {
   const apiToken =
@@ -76,6 +77,7 @@ export function buildWassengerMessageRequest(input: {
 
   const fileId = getProviderVariable(input.provider, 'media_file_id')
   const templateName =
+    normalizeTemplateName(input.templateName) ??
     getProviderVariable(input.provider, 'waba_template_name') ??
     getProviderVariable(input.provider, 'template_name')
   const templateLanguage =
@@ -218,6 +220,12 @@ function parseButtonVariableDescriptor(rawDescriptor: string) {
 
 function isTopTeaserMetaTemplate(templateName: string) {
   return templateName.trim().toLowerCase() === 'top_teaser_campagne'
+}
+
+function normalizeTemplateName(templateName: string | null | undefined) {
+  const normalized = templateName?.trim()
+
+  return normalized && normalized.length > 0 ? normalized : undefined
 }
 
 function isLegacyBodyMapping(mapping: string) {

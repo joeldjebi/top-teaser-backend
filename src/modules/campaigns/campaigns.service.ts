@@ -9,6 +9,7 @@ import {
 } from '../communication-providers/adapters/wassenger.provider.js'
 import { findTemplateById } from '../templates/templates.repository.js'
 import { renderTemplate } from '../templates/templates.renderer.js'
+import type { EmailTemplate } from '../templates/templates.types.js'
 import { createTechnicalLog } from '../technical-logs/technical-logs.repository.js'
 import { createUnsubscribeToken } from '../unsubscribes/unsubscribe-token.js'
 import { env } from '../../config/env.js'
@@ -557,6 +558,7 @@ async function sendCommunicationCampaignChannel(
         provider,
         recipient,
         source,
+        template,
       })
 
       await markCampaignChannelRecipientSent({
@@ -594,6 +596,7 @@ async function sendCommunicationMessage(input: {
   provider: CommunicationProvider
   recipient: CampaignChannelRecipient
   source: CampaignSendSource
+  template: EmailTemplate
 }) {
   const request = buildCommunicationRequest(input)
 
@@ -640,12 +643,15 @@ function buildCommunicationRequest(input: {
   message: string
   provider: CommunicationProvider
   recipient: CampaignChannelRecipient
+  template: EmailTemplate
 }) {
   if (isWassengerProvider(input.provider)) {
     return buildWassengerMessageRequest({
       message: input.message,
       phone: getRecipientValue(input.provider, input.recipient),
       provider: input.provider,
+      templateName:
+        input.template.channel === 'whatsapp' ? input.template.name : undefined,
       variables: getTemplateVariables(input.recipient.contact),
     })
   }
